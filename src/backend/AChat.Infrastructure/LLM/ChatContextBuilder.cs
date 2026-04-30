@@ -26,6 +26,7 @@ public class ChatContextBuilder
     public async Task<LLMChatRequest> BuildAsync(
         Bot bot,
         Guid userId,
+        Guid conversationId,
         string userMessage,
         float[]? queryEmbedding,
         CancellationToken ct = default)
@@ -34,7 +35,7 @@ public class ChatContextBuilder
 
         // Latest memory summary for this bot+user
         var summary = await _db.BotMemorySummaries
-            .Where(s => s.BotId == bot.Id && s.UserId == userId)
+            .Where(s => s.BotId == bot.Id && s.UserId == userId && s.ConversationId == conversationId)
             .OrderByDescending(s => s.CreatedAt)
             .FirstOrDefaultAsync(ct);
 
@@ -46,7 +47,10 @@ public class ChatContextBuilder
         {
             var queryVector = new Vector(queryEmbedding);
             var ragMessages = await _db.Messages
-                .Where(m => m.BotId == bot.Id && m.UserId == userId && m.Embedding != null)
+                .Where(m => m.BotId == bot.Id
+                            && m.UserId == userId
+                            && m.ConversationId == conversationId
+                            && m.Embedding != null)
                 .OrderBy(m => m.Embedding!.CosineDistance(queryVector))
                 .Take(_ragTopK)
                 .OrderBy(m => m.CreatedAt)
@@ -63,7 +67,9 @@ public class ChatContextBuilder
 
         // Recent raw messages (last N, excluding those that are already in a summary range)
         var recentMessages = await _db.Messages
-            .Where(m => m.BotId == bot.Id && m.UserId == userId
+            .Where(m => m.BotId == bot.Id
+                        && m.UserId == userId
+                        && m.ConversationId == conversationId
                         && m.Role != MessageRole.System)
             .OrderByDescending(m => m.CreatedAt)
             .Take(_recentWindowSize)

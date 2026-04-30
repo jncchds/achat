@@ -54,10 +54,10 @@ public class SummarizationWorker : BackgroundService
         // Find bot+user pairs with unsummarized messages beyond threshold
         var pairs = await db.Messages
             .Where(m => !db.BotMemorySummaries
-                .Any(s => s.BotId == m.BotId && s.UserId == m.UserId
+                .Any(s => s.BotId == m.BotId && s.UserId == m.UserId && s.ConversationId == m.ConversationId
                           && s.MessageRangeEnd == m.Id))
-            .GroupBy(m => new { m.BotId, m.UserId })
-            .Select(g => new { g.Key.BotId, g.Key.UserId, Count = g.Count() })
+            .GroupBy(m => new { m.BotId, m.UserId, m.ConversationId })
+            .Select(g => new { g.Key.BotId, g.Key.UserId, g.Key.ConversationId, Count = g.Count() })
             .Where(x => x.Count > _opts.SummarizationThreshold)
             .ToListAsync(ct);
 
@@ -65,13 +65,13 @@ public class SummarizationWorker : BackgroundService
         {
             try
             {
-                await SummarizeAsync(db, factory, pair.BotId, pair.UserId, ct);
+                await SummarizeAsync(db, factory, pair.BotId, pair.UserId, pair.ConversationId, ct);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex,
-                    "Failed to summarize for bot {BotId}, user {UserId}.",
-                    pair.BotId, pair.UserId);
+                    "Failed to summarize for bot {BotId}, user {UserId}, conversation {ConversationId}.",
+                    pair.BotId, pair.UserId, pair.ConversationId);
             }
         }
     }
@@ -81,6 +81,7 @@ public class SummarizationWorker : BackgroundService
         ILLMProviderFactory factory,
         Guid botId,
         Guid userId,
+        Guid conversationId,
         CancellationToken ct)
     {
         var bot = await db.Bots
@@ -92,12 +93,13 @@ public class SummarizationWorker : BackgroundService
 
         // Get oldest N messages not yet covered by a summary
         var summarizedIds = await db.BotMemorySummaries
-            .Where(s => s.BotId == botId && s.UserId == userId)
+            .Where(s => s.BotId == botId && s.UserId == userId && s.ConversationId == conversationId)
             .Select(s => s.MessageRangeEnd)
             .ToListAsync(ct);
 
         var messages = await db.Messages
             .Where(m => m.BotId == botId && m.UserId == userId
+                        && m.ConversationId == conversationId
                         && !summarizedIds.Contains(m.Id)
                         && m.Role != MessageRole.System)
             .OrderBy(m => m.CreatedAt)
@@ -131,6 +133,7 @@ public class SummarizationWorker : BackgroundService
             Id = Guid.NewGuid(),
             BotId = botId,
             UserId = userId,
+            ConversationId = conversationId,
             SummaryText = summaryText,
             MessageRangeStart = messages.First().Id,
             MessageRangeEnd = messages.Last().Id,
@@ -153,7 +156,7 @@ public class SummarizationWorker : BackgroundService
         await db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
-            "Summarized {Count} messages for bot {BotId}, user {UserId}.",
-            messages.Count, botId, userId);
+            "Summarized {Count} messages for bot {BotId}, user {UserId}, conversation {ConversationId}.",
+            messages.Count, botId, userId, conversationId);
     }
 }

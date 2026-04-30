@@ -11,6 +11,8 @@ public class AppDbContext : DbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<LLMProviderPreset> LLMProviderPresets => Set<LLMProviderPreset>();
     public DbSet<Bot> Bots => Set<Bot>();
+    public DbSet<BotConversation> BotConversations => Set<BotConversation>();
+    public DbSet<BotConversationState> BotConversationStates => Set<BotConversationState>();
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<BotMemorySummary> BotMemorySummaries => Set<BotMemorySummary>();
     public DbSet<BotPersonaSnapshot> BotPersonaSnapshots => Set<BotPersonaSnapshot>();
@@ -67,6 +69,46 @@ public class AppDbContext : DbContext
              .OnDelete(DeleteBehavior.SetNull);
         });
 
+        // BotConversation
+        modelBuilder.Entity<BotConversation>(e =>
+        {
+            e.HasKey(c => c.Id);
+            e.Property(c => c.Id).HasDefaultValueSql("gen_random_uuid()");
+            e.Property(c => c.CreatedAt).HasDefaultValueSql("now()");
+            e.Property(c => c.UpdatedAt).HasDefaultValueSql("now()");
+            e.Property(c => c.LastMessageAt).HasDefaultValueSql("now()");
+            e.HasIndex(c => new { c.BotId, c.UserId, c.UpdatedAt });
+            e.HasOne(c => c.Bot)
+             .WithMany(b => b.Conversations)
+             .HasForeignKey(c => c.BotId)
+             .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(c => c.User)
+             .WithMany(u => u.Conversations)
+             .HasForeignKey(c => c.UserId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // BotConversationState
+        modelBuilder.Entity<BotConversationState>(e =>
+        {
+            e.HasKey(s => s.Id);
+            e.Property(s => s.Id).HasDefaultValueSql("gen_random_uuid()");
+            e.Property(s => s.UpdatedAt).HasDefaultValueSql("now()");
+            e.HasIndex(s => new { s.BotId, s.UserId }).IsUnique();
+            e.HasOne(s => s.Bot)
+             .WithMany(b => b.ConversationStates)
+             .HasForeignKey(s => s.BotId)
+             .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(s => s.User)
+             .WithMany(u => u.ConversationStates)
+             .HasForeignKey(s => s.UserId)
+             .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(s => s.CurrentConversation)
+             .WithMany()
+             .HasForeignKey(s => s.CurrentConversationId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
         // Message
         modelBuilder.Entity<Message>(e =>
         {
@@ -74,7 +116,7 @@ public class AppDbContext : DbContext
             e.Property(m => m.Id).HasDefaultValueSql("gen_random_uuid()");
             e.Property(m => m.CreatedAt).HasDefaultValueSql("now()");
             e.Property(m => m.Embedding).HasColumnType("vector(1536)");
-            e.HasIndex(m => new { m.BotId, m.UserId, m.CreatedAt });
+            e.HasIndex(m => new { m.BotId, m.UserId, m.ConversationId, m.CreatedAt });
             e.HasOne(m => m.Bot)
              .WithMany(b => b.Messages)
              .HasForeignKey(m => m.BotId)
@@ -82,6 +124,10 @@ public class AppDbContext : DbContext
             e.HasOne(m => m.User)
              .WithMany()
              .HasForeignKey(m => m.UserId)
+             .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(m => m.Conversation)
+             .WithMany(c => c.Messages)
+             .HasForeignKey(m => m.ConversationId)
              .OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -92,6 +138,7 @@ public class AppDbContext : DbContext
             e.Property(s => s.Id).HasDefaultValueSql("gen_random_uuid()");
             e.Property(s => s.CreatedAt).HasDefaultValueSql("now()");
             e.Property(s => s.Embedding).HasColumnType("vector(1536)");
+                        e.HasIndex(s => new { s.BotId, s.UserId, s.ConversationId, s.CreatedAt });
             e.HasOne(s => s.Bot)
              .WithMany(b => b.MemorySummaries)
              .HasForeignKey(s => s.BotId)
@@ -100,6 +147,10 @@ public class AppDbContext : DbContext
              .WithMany()
              .HasForeignKey(s => s.UserId)
              .OnDelete(DeleteBehavior.Cascade);
+                        e.HasOne(s => s.Conversation)
+                         .WithMany(c => c.MemorySummaries)
+                         .HasForeignKey(s => s.ConversationId)
+                         .OnDelete(DeleteBehavior.Cascade);
         });
 
         // BotPersonaSnapshot

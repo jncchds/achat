@@ -1,5 +1,7 @@
 {
     "chat.tools.terminal.autoApprove": {
-        "mkdir": true
+        "mkdir": true,
+        "npm run build": true,
+        "git add": true
     }
 }

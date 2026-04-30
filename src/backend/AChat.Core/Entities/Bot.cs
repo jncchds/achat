@@ -18,6 +18,8 @@ public class Bot
     public User Owner { get; set; } = null!;
     public LLMProviderPreset? LLMProviderPreset { get; set; }
     public LLMProviderPreset? EmbeddingPreset { get; set; }
+    public ICollection<BotConversation> Conversations { get; set; } = [];
+    public ICollection<BotConversationState> ConversationStates { get; set; } = [];
     public ICollection<Message> Messages { get; set; } = [];
     public ICollection<BotMemorySummary> MemorySummaries { get; set; } = [];
     public ICollection<BotPersonaSnapshot> PersonaSnapshots { get; set; } = [];

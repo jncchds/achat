@@ -31,7 +31,7 @@ public class ChatHub : Hub
         _evolutionOptions = evolutionOptions.Value;
     }
 
-    public async Task SendMessage(Guid botId, string content)
+    public async Task SendMessage(Guid botId, string content, Guid? conversationId = null)
     {
         var userId = GetUserId();
         var ct = Context.ConnectionAborted;
@@ -62,18 +62,33 @@ public class ChatHub : Hub
             return;
         }
 
+        var conversation = await ResolveConversationAsync(botId, userId, conversationId, ct);
+        if (conversation is null)
+        {
+            await Clients.Caller.SendAsync("Error", "Conversation not found.", ct);
+            return;
+        }
+
+        await Clients.Caller.SendAsync("ConversationResolved", conversation.Id, conversation.Title, ct);
+
         // Persist user message
         var userMessage = new Message
         {
             Id = Guid.NewGuid(),
             BotId = botId,
             UserId = userId,
+            ConversationId = conversation.Id,
             Role = MessageRole.User,
             Content = content,
             Source = MessageSource.Web,
             CreatedAt = DateTime.UtcNow
         };
         _db.Messages.Add(userMessage);
+
+        conversation.Title = BuildConversationTitle(content);
+        conversation.UpdatedAt = DateTime.UtcNow;
+        conversation.LastMessageAt = DateTime.UtcNow;
+
         await _db.SaveChangesAsync(ct);
 
         // Generate query embedding if embedding preset is configured
@@ -103,7 +118,13 @@ public class ChatHub : Hub
         var contextBuilder = new ChatContextBuilder(
             _db, _evolutionOptions.RagTopK, _evolutionOptions.RecentMessageWindowSize);
 
-        var chatRequest = await contextBuilder.BuildAsync(bot, userId, content, queryEmbedding, ct);
+        var chatRequest = await contextBuilder.BuildAsync(
+            bot,
+            userId,
+            conversation.Id,
+            content,
+            queryEmbedding,
+            ct);
 
         // Stream response
         var chatProvider = _providerFactory.GetChatProvider(bot.LLMProviderPreset);
@@ -121,12 +142,16 @@ public class ChatHub : Hub
             Id = Guid.NewGuid(),
             BotId = botId,
             UserId = userId,
+            ConversationId = conversation.Id,
             Role = MessageRole.Assistant,
             Content = responseTokens.ToString(),
             Source = MessageSource.Web,
             CreatedAt = DateTime.UtcNow
         };
         _db.Messages.Add(assistantMessage);
+
+        conversation.UpdatedAt = DateTime.UtcNow;
+        conversation.LastMessageAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
         // Generate embedding for assistant message
@@ -147,6 +172,106 @@ public class ChatHub : Hub
         }
 
         await Clients.Caller.SendAsync("ReceiveMessageComplete", assistantMessage.Id, ct);
+    }
+
+    private async Task<BotConversation?> ResolveConversationAsync(
+        Guid botId,
+        Guid userId,
+        Guid? requestedConversationId,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+
+        if (requestedConversationId.HasValue)
+        {
+            var requested = await _db.BotConversations.FirstOrDefaultAsync(c =>
+                c.Id == requestedConversationId.Value
+                && c.BotId == botId
+                && c.UserId == userId, ct);
+
+            if (requested is null) return null;
+
+            await UpsertConversationStateAsync(botId, userId, requested.Id, now, ct);
+            return requested;
+        }
+
+        var state = await _db.BotConversationStates.FirstOrDefaultAsync(
+            s => s.BotId == botId && s.UserId == userId, ct);
+
+        BotConversation? conversation = null;
+        if (state is not null)
+        {
+            conversation = await _db.BotConversations.FirstOrDefaultAsync(c =>
+                c.Id == state.CurrentConversationId
+                && c.BotId == botId
+                && c.UserId == userId, ct);
+        }
+
+        conversation ??= await _db.BotConversations
+            .Where(c => c.BotId == botId && c.UserId == userId)
+            .OrderByDescending(c => c.UpdatedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (conversation is null)
+        {
+            conversation = new BotConversation
+            {
+                Id = Guid.NewGuid(),
+                BotId = botId,
+                UserId = userId,
+                Title = "New conversation",
+                CreatedAt = now,
+                UpdatedAt = now,
+                LastMessageAt = now
+            };
+            _db.BotConversations.Add(conversation);
+        }
+
+        await UpsertConversationStateAsync(botId, userId, conversation.Id, now, ct);
+        await _db.SaveChangesAsync(ct);
+
+        return conversation;
+    }
+
+    private async Task UpsertConversationStateAsync(
+        Guid botId,
+        Guid userId,
+        Guid conversationId,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var state = await _db.BotConversationStates.FirstOrDefaultAsync(
+            s => s.BotId == botId && s.UserId == userId, ct);
+
+        if (state is null)
+        {
+            _db.BotConversationStates.Add(new BotConversationState
+            {
+                Id = Guid.NewGuid(),
+                BotId = botId,
+                UserId = userId,
+                CurrentConversationId = conversationId,
+                UpdatedAt = now
+            });
+        }
+        else
+        {
+            state.CurrentConversationId = conversationId;
+            state.UpdatedAt = now;
+        }
+    }
+
+    private static string BuildConversationTitle(string content)
+    {
+        var normalized = content.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            return "New conversation";
+
+        var firstLine = normalized.Split('\n', StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+        const int maxLen = 64;
+        return firstLine.Length <= maxLen
+            ? firstLine
+            : $"{firstLine[..(maxLen - 1)].TrimEnd()}…";
     }
 
     private Guid GetUserId() =>

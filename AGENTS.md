@@ -33,7 +33,7 @@ achat/
 │   │   │   ├── Security/            # AesEncryptionService
 │   │   │   └── Telegram/            # TelegramWebhookService, TelegramHandlerService
 │   │   ├── AChat.Api/               # ASP.NET Core 10 Web API + SignalR
-│   │   │   ├── Controllers/         # AuthController, PresetsController, BotsController, AccessController, TelegramController
+│   │   │   ├── Controllers/         # AuthController, PresetsController, BotsController, ConversationsController, AccessController, TelegramController
 │   │   │   ├── Hubs/                # ChatHub (SignalR)
 │   │   │   └── Models/              # Request/response DTOs
 │   │   └── AChat.Worker/            # IHostedService background workers
@@ -57,8 +57,10 @@ achat/
 | `User` | Id, Email?, PasswordHash?, TelegramId (long?), IsStubAccount |
 | `LLMProviderPreset` | UserId, Name, Provider (enum), EncryptedApiKey, BaseUrl, ModelName, EmbeddingModel, ParametersJson |
 | `Bot` | OwnerId, Name, Age?, Gender (freeform string), CharacterDescription, EvolvingPersonaPrompt, LLMProviderPresetId, EmbeddingPresetId, EncryptedTelegramBotToken |
-| `Message` | BotId, UserId, Role (enum), Content, Embedding (vector), Source (enum: Web/Telegram) |
-| `BotMemorySummary` | BotId, UserId, SummaryText, Embedding (vector), MessageRangeStart, MessageRangeEnd |
+| `BotConversation` | BotId, UserId, Title, CreatedAt, UpdatedAt, LastMessageAt |
+| `BotConversationState` | BotId, UserId, CurrentConversationId, UpdatedAt (tracks active conversation per bot+user) |
+| `Message` | BotId, UserId, ConversationId, Role (enum), Content, Embedding (vector), Source (enum: Web/Telegram) |
+| `BotMemorySummary` | BotId, UserId, ConversationId, SummaryText, Embedding (vector), MessageRangeStart, MessageRangeEnd |
 | `BotPersonaSnapshot` | BotId, SnapshotText — immutable audit log of persona changes |
 | `BotAccessList` | BotId, SubjectType (AchatUser/TelegramUser), SubjectId (string), Status (Allowed/Denied) |
 | `BotAccessRequest` | BotId, SubjectType, SubjectId, DisplayName?, Status (Pending/Approved/Denied), ResolvedByUserId? |
@@ -86,8 +88,9 @@ Bot owner is always implicitly allowed on web. Owner is auto-added to `BotAccess
 | Auth | `POST /api/auth/register`, `POST /api/auth/login`, `PUT /api/auth/telegram` |
 | Presets | `GET/POST /api/presets`, `GET/PUT/DELETE /api/presets/{id}` |
 | Bots | `GET/POST /api/bots`, `GET/PUT/DELETE /api/bots/{id}`, `GET /api/bots/{id}/persona-history` |
+| Conversations | `GET/POST /api/bots/{botId}/conversations`, `GET /api/bots/{botId}/conversations/{conversationId}/messages` |
 | Access | `GET /api/bots/{id}/access-requests`, `POST .../approve`, `POST .../deny`, `GET/DELETE /api/bots/{id}/access-list` |
-| Chat | SignalR hub `/hubs/chat` — `SendMessage(botId, content)` → streaming `ReceiveToken(chunk)` |
+| Chat | SignalR hub `/hubs/chat` — `SendMessage(botId, content, conversationId?)` → streaming `ReceiveToken(chunk)` |
 | Telegram | `POST /api/telegram/webhook/{botId}` — per-bot, validated via secret token header |
 
 All endpoints except register/login require JWT Bearer authentication.
@@ -157,6 +160,9 @@ MIT
 - Webhook: `POST /api/telegram/webhook/{botId}` — registered/updated via Telegram `setWebhook` API dynamically when token is saved
 - **Unknown sender** → reply "I don't know you, go away" + create `BotAccessRequest(Pending)`
 - **Denied sender** → silently drop message, no reply
-- **Approved sender** → route to chat engine; history stored with `Source=Telegram`, merged with web history
+- **Approved sender** → route to chat engine; history stored with `Source=Telegram` and scoped by `ConversationId`
+- Commands:
+  - `/new` (also `/newconversation`) → creates and activates a new conversation
+  - `/conversations` (also `/continue`) → shows inline buttons to choose an existing conversation
 - Response style: send `typing...` action while LLM generates, then send complete message
 - Owner receives inline `[Approve] [Deny]` keyboard message on new access requests

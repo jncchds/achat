@@ -11,4 +11,6 @@ public class User
 
     public ICollection<LLMProviderPreset> Presets { get; set; } = [];
     public ICollection<Bot> Bots { get; set; } = [];
+    public ICollection<BotConversation> Conversations { get; set; } = [];
+    public ICollection<BotConversationState> ConversationStates { get; set; } = [];
 }

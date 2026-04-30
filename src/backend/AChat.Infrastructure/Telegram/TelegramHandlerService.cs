@@ -11,6 +11,7 @@ using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 using DomainUser = AChat.Core.Entities.User;
 using DomainMessage = AChat.Core.Entities.Message;
+using TelegramMessage = Telegram.Bot.Types.Message;
 
 namespace AChat.Infrastructure.Telegram;
 
@@ -123,6 +124,14 @@ public class TelegramHandlerService
             await _db.SaveChangesAsync(ct);
         }
 
+        if (message.Text.StartsWith('/'))
+        {
+            var handled = await HandleTelegramCommandAsync(bot, user, message, telegramClient, ct);
+            if (handled) return;
+        }
+
+        var conversation = await ResolveConversationForTelegramAsync(bot.Id, user.Id, ct);
+
         // Send typing action
         await telegramClient.SendChatAction(message.Chat.Id, ChatAction.Typing, cancellationToken: ct);
 
@@ -132,12 +141,18 @@ public class TelegramHandlerService
             Id = Guid.NewGuid(),
             BotId = botId,
             UserId = user.Id,
+            ConversationId = conversation.Id,
             Role = MessageRole.User,
             Content = message.Text,
             Source = MessageSource.Telegram,
             CreatedAt = DateTime.UtcNow
         };
         _db.Messages.Add(userMsg);
+
+        conversation.Title = BuildConversationTitle(message.Text);
+        conversation.UpdatedAt = DateTime.UtcNow;
+        conversation.LastMessageAt = DateTime.UtcNow;
+
         await _db.SaveChangesAsync(ct);
 
         // Generate embedding
@@ -158,7 +173,13 @@ public class TelegramHandlerService
 
         // Build context + generate full response
         var contextBuilder = new ChatContextBuilder(_db, _ragTopK, _recentWindowSize);
-        var chatRequest = await contextBuilder.BuildAsync(bot, user.Id, message.Text, queryEmbedding, ct);
+        var chatRequest = await contextBuilder.BuildAsync(
+            bot,
+            user.Id,
+            conversation.Id,
+            message.Text,
+            queryEmbedding,
+            ct);
 
         var chatProvider = _providerFactory.GetChatProvider(bot.LLMProviderPreset);
         var responseText = await chatProvider.GenerateChatAsync(chatRequest, ct);
@@ -169,12 +190,16 @@ public class TelegramHandlerService
             Id = Guid.NewGuid(),
             BotId = botId,
             UserId = user.Id,
+            ConversationId = conversation.Id,
             Role = MessageRole.Assistant,
             Content = responseText,
             Source = MessageSource.Telegram,
             CreatedAt = DateTime.UtcNow
         };
         _db.Messages.Add(assistantMsg);
+
+        conversation.UpdatedAt = DateTime.UtcNow;
+        conversation.LastMessageAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
         // Embed assistant message
@@ -197,6 +222,12 @@ public class TelegramHandlerService
     {
         var data = callbackQuery.Data;
         if (data is null) return;
+
+        if (data.StartsWith("conv:", StringComparison.Ordinal))
+        {
+            await HandleConversationSelectionCallbackAsync(botId, callbackQuery, ct);
+            return;
+        }
 
         // Format: "approve:{botId}:{telegramUserId}" or "deny:{botId}:{telegramUserId}"
         var parts = data.Split(':');
@@ -319,9 +350,236 @@ public class TelegramHandlerService
         }
     }
 
+    private async Task<bool> HandleTelegramCommandAsync(
+        AChat.Core.Entities.Bot bot,
+        DomainUser user,
+        TelegramMessage message,
+        TelegramBotClient telegramClient,
+        CancellationToken ct)
+    {
+        var command = message.Text!.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries)[0].ToLowerInvariant();
+
+        if (command is "/new" or "/newconversation" or "/new_conversation")
+        {
+            var conversation = await CreateNewConversationAsync(bot.Id, user.Id, "New conversation", ct);
+            await telegramClient.SendMessage(
+                message.Chat.Id,
+                $"🆕 Started a new conversation: {conversation.Title}",
+                cancellationToken: ct);
+            return true;
+        }
+
+        if (command is "/conversations" or "/continue")
+        {
+            var state = await _db.BotConversationStates
+                .FirstOrDefaultAsync(s => s.BotId == bot.Id && s.UserId == user.Id, ct);
+
+            var conversations = await _db.BotConversations
+                .Where(c => c.BotId == bot.Id && c.UserId == user.Id)
+                .OrderByDescending(c => c.UpdatedAt)
+                .Take(10)
+                .ToListAsync(ct);
+
+            if (conversations.Count == 0)
+            {
+                await telegramClient.SendMessage(
+                    message.Chat.Id,
+                    "You don't have any conversations yet. Use /new to start one.",
+                    cancellationToken: ct);
+                return true;
+            }
+
+            var keyboardRows = conversations
+                .Select(c =>
+                {
+                    var title = c.Title.Length > 40 ? $"{c.Title[..39]}…" : c.Title;
+                    var marker = state?.CurrentConversationId == c.Id ? "✅ " : string.Empty;
+                    return new[]
+                    {
+                        InlineKeyboardButton.WithCallbackData($"{marker}{title}", $"conv:{c.Id}")
+                    };
+                })
+                .ToArray();
+
+            await telegramClient.SendMessage(
+                message.Chat.Id,
+                "Pick a conversation to continue:",
+                replyMarkup: new InlineKeyboardMarkup(keyboardRows),
+                cancellationToken: ct);
+
+            return true;
+        }
+
+        if (command is "/start")
+        {
+            await telegramClient.SendMessage(
+                message.Chat.Id,
+                "Commands:\n/new — start a new conversation\n/conversations — choose a conversation to continue",
+                cancellationToken: ct);
+            return true;
+        }
+
+        return false;
+    }
+
+    private async Task HandleConversationSelectionCallbackAsync(
+        Guid botId,
+        CallbackQuery callbackQuery,
+        CancellationToken ct)
+    {
+        var data = callbackQuery.Data;
+        if (data is null) return;
+
+        var rawConversationId = data["conv:".Length..];
+        if (!Guid.TryParse(rawConversationId, out var conversationId)) return;
+
+        var bot = await _db.Bots.FirstOrDefaultAsync(b => b.Id == botId, ct);
+        if (bot?.EncryptedTelegramBotToken is null) return;
+
+        var rawToken = _encryption.Decrypt(bot.EncryptedTelegramBotToken);
+        var telegramClient = new TelegramBotClient(rawToken);
+
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.TelegramId == callbackQuery.From.Id, ct);
+        if (user is null)
+        {
+            await telegramClient.AnswerCallbackQuery(callbackQuery.Id, "Unknown user.", cancellationToken: ct);
+            return;
+        }
+
+        var canUse = await _db.BotAccessLists.AnyAsync(a =>
+            a.BotId == botId
+            && a.SubjectType == AccessSubjectType.TelegramUser
+            && a.SubjectId == callbackQuery.From.Id.ToString()
+            && a.Status == AccessStatus.Allowed, ct);
+
+        if (!canUse)
+        {
+            await telegramClient.AnswerCallbackQuery(callbackQuery.Id, "Access denied.", cancellationToken: ct);
+            return;
+        }
+
+        var conversation = await _db.BotConversations.FirstOrDefaultAsync(c =>
+            c.Id == conversationId && c.BotId == botId && c.UserId == user.Id, ct);
+
+        if (conversation is null)
+        {
+            await telegramClient.AnswerCallbackQuery(callbackQuery.Id, "Conversation not found.", cancellationToken: ct);
+            return;
+        }
+
+        await UpsertConversationStateAsync(botId, user.Id, conversation.Id, ct);
+        await _db.SaveChangesAsync(ct);
+
+        await telegramClient.AnswerCallbackQuery(callbackQuery.Id, "Conversation selected.", cancellationToken: ct);
+
+        if (callbackQuery.Message is not null)
+        {
+            await telegramClient.EditMessageText(
+                callbackQuery.Message.Chat.Id,
+                callbackQuery.Message.MessageId,
+                $"✅ Active conversation: {conversation.Title}",
+                cancellationToken: ct);
+        }
+    }
+
+    private async Task<BotConversation> ResolveConversationForTelegramAsync(Guid botId, Guid userId, CancellationToken ct)
+    {
+        var state = await _db.BotConversationStates
+            .FirstOrDefaultAsync(s => s.BotId == botId && s.UserId == userId, ct);
+
+        if (state is not null)
+        {
+            var current = await _db.BotConversations
+                .FirstOrDefaultAsync(c => c.Id == state.CurrentConversationId
+                                          && c.BotId == botId
+                                          && c.UserId == userId, ct);
+            if (current is not null) return current;
+        }
+
+        var latest = await _db.BotConversations
+            .Where(c => c.BotId == botId && c.UserId == userId)
+            .OrderByDescending(c => c.UpdatedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (latest is not null)
+        {
+            await UpsertConversationStateAsync(botId, userId, latest.Id, ct);
+            await _db.SaveChangesAsync(ct);
+            return latest;
+        }
+
+        return await CreateNewConversationAsync(botId, userId, "New conversation", ct);
+    }
+
+    private async Task<BotConversation> CreateNewConversationAsync(
+        Guid botId,
+        Guid userId,
+        string title,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var conversation = new BotConversation
+        {
+            Id = Guid.NewGuid(),
+            BotId = botId,
+            UserId = userId,
+            Title = title,
+            CreatedAt = now,
+            UpdatedAt = now,
+            LastMessageAt = now
+        };
+
+        _db.BotConversations.Add(conversation);
+        await UpsertConversationStateAsync(botId, userId, conversation.Id, ct);
+        await _db.SaveChangesAsync(ct);
+        return conversation;
+    }
+
+    private async Task UpsertConversationStateAsync(
+        Guid botId,
+        Guid userId,
+        Guid conversationId,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var state = await _db.BotConversationStates
+            .FirstOrDefaultAsync(s => s.BotId == botId && s.UserId == userId, ct);
+
+        if (state is null)
+        {
+            _db.BotConversationStates.Add(new BotConversationState
+            {
+                Id = Guid.NewGuid(),
+                BotId = botId,
+                UserId = userId,
+                CurrentConversationId = conversationId,
+                UpdatedAt = now
+            });
+        }
+        else
+        {
+            state.CurrentConversationId = conversationId;
+            state.UpdatedAt = now;
+        }
+    }
+
+    private static string BuildConversationTitle(string content)
+    {
+        var normalized = content.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            return "New conversation";
+
+        var firstLine = normalized.Split('\n', StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+        const int maxLen = 64;
+        return firstLine.Length <= maxLen
+            ? firstLine
+            : $"{firstLine[..(maxLen - 1)].TrimEnd()}…";
+    }
+
+
     private async Task NotifyOwnerAsync(
         TelegramBotClient client,
-        Bot bot,
+        AChat.Core.Entities.Bot bot,
         long requesterTelegramId,
         string? displayName,
         CancellationToken ct)

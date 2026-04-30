@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, type FormEvent } from 'react';
 import { useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as signalR from '@microsoft/signalr';
 import { botsApi } from '../api/bots';
+import { conversationsApi, type ConversationMessage } from '../api/conversations';
 import { useAuth } from '../contexts/AuthContext';
 import { HUB_URL } from '../api/client';
 
@@ -18,16 +19,61 @@ export function ChatPage() {
   const { token } = useAuth();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState('');
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [sending, setSending] = useState(false);
+  const [creatingConversation, setCreatingConversation] = useState(false);
   const connRef = useRef<signalR.HubConnection | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const queryClient = useQueryClient();
 
   const { data: bot } = useQuery({
     queryKey: ['bot', botId],
     queryFn: () => botsApi.get(botId!, token!),
     enabled: !!botId,
   });
+
+  const { data: conversations } = useQuery({
+    queryKey: ['conversations', botId],
+    queryFn: () => conversationsApi.list(botId!, token!),
+    enabled: !!botId && !!token,
+  });
+
+  const { data: conversationMessages, isLoading: loadingMessages } = useQuery({
+    queryKey: ['conversation-messages', botId, activeConversationId],
+    queryFn: () => conversationsApi.messages(botId!, activeConversationId!, token!),
+    enabled: !!botId && !!token && !!activeConversationId,
+  });
+
+  const createConversationMutation = useMutation({
+    mutationFn: () => conversationsApi.create(botId!, token!),
+    onSuccess: async (created) => {
+      setActiveConversationId(created.id);
+      await queryClient.invalidateQueries({ queryKey: ['conversations', botId] });
+    },
+  });
+
+  useEffect(() => {
+    if (conversations && conversations.length > 0 && !activeConversationId) {
+      setActiveConversationId(conversations[0].id);
+    }
+  }, [conversations, activeConversationId]);
+
+  useEffect(() => {
+    if (!activeConversationId) {
+      setMessages([]);
+      return;
+    }
+
+    if (!sending) {
+      const mapped = (conversationMessages ?? []).map((msg: ConversationMessage) => ({
+        id: msg.id,
+        role: msg.role,
+        content: msg.content,
+      }));
+      setMessages(mapped);
+    }
+  }, [conversationMessages, activeConversationId, sending]);
 
   useEffect(() => {
     const conn = new signalR.HubConnectionBuilder()
@@ -53,6 +99,14 @@ export function ChatPage() {
           : prev;
       });
       setSending(false);
+      queryClient.invalidateQueries({ queryKey: ['conversations', botId] });
+      if (activeConversationId) {
+        queryClient.invalidateQueries({ queryKey: ['conversation-messages', botId, activeConversationId] });
+      }
+    });
+
+    conn.on('ConversationResolved', (conversationId: string) => {
+      setActiveConversationId(conversationId);
     });
 
     conn.on('Error', (msg: string) => {
@@ -66,7 +120,7 @@ export function ChatPage() {
 
     connRef.current = conn;
     return () => { conn.stop(); };
-  }, [token]);
+  }, [token, queryClient, botId, activeConversationId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -76,51 +130,116 @@ export function ChatPage() {
     e.preventDefault();
     const text = input.trim();
     if (!text || !connected || sending || !botId) return;
+
+    let conversationId = activeConversationId;
+    if (!conversationId) {
+      setCreatingConversation(true);
+      try {
+        const created = await createConversationMutation.mutateAsync();
+        conversationId = created.id;
+        setActiveConversationId(created.id);
+      } finally {
+        setCreatingConversation(false);
+      }
+    }
+
     setMessages(prev => [...prev, { role: 'user', content: text }]);
     setInput('');
     setSending(true);
     try {
-      await connRef.current?.invoke('SendMessage', botId, text);
+      await connRef.current?.invoke('SendMessage', botId, text, conversationId);
     } catch {
       setMessages(prev => [...prev, { role: 'assistant', content: '⚠️ Failed to send.' }]);
       setSending(false);
     }
   };
 
+  const handleCreateConversation = async () => {
+    if (!botId || !token || creatingConversation || sending) return;
+    setCreatingConversation(true);
+    try {
+      const created = await createConversationMutation.mutateAsync();
+      setActiveConversationId(created.id);
+      setMessages([]);
+    } finally {
+      setCreatingConversation(false);
+    }
+  };
+
   return (
-    <div className="chat-page">
-      <div className="chat-header">
-        <h2>{bot?.name ?? 'Chat'}</h2>
-        <span className={`status-dot ${connected ? 'online' : 'offline'}`} title={connected ? 'Connected' : 'Disconnected'} />
-      </div>
+    <div className="chat-page chat-layout">
+      <aside className="conversation-sidebar">
+        <div className="conversation-sidebar-header">
+          <h3>Conversations</h3>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={handleCreateConversation}
+            disabled={creatingConversation || sending}
+          >
+            {creatingConversation ? 'Creating…' : 'New'}
+          </button>
+        </div>
+        <div className="conversation-list">
+          {!conversations || conversations.length === 0 ? (
+            <div className="muted">No conversations yet.</div>
+          ) : (
+            conversations.map(conv => (
+              <button
+                key={conv.id}
+                type="button"
+                className={`conversation-item ${activeConversationId === conv.id ? 'active' : ''}`}
+                onClick={() => setActiveConversationId(conv.id)}
+                disabled={sending}
+                title={conv.title}
+              >
+                <div className="conversation-item-title">{conv.title}</div>
+                <div className="conversation-item-meta">
+                  {new Date(conv.updatedAt).toLocaleString()}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      </aside>
 
-      <div className="chat-messages">
-        {messages.length === 0 && (
-          <div className="chat-empty">Send a message to start the conversation.</div>
-        )}
-        {messages.map((msg, i) => (
-          <div key={msg.id ?? i} className={`message message-${msg.role}`}>
-            <div className="message-bubble">
-              {msg.content}
-              {msg.streaming && <span className="cursor">▊</span>}
+      <div className="chat-main-panel">
+        <div className="chat-header">
+          <h2>{bot?.name ?? 'Chat'}</h2>
+          <span className={`status-dot ${connected ? 'online' : 'offline'}`} title={connected ? 'Connected' : 'Disconnected'} />
+        </div>
+
+        <div className="chat-messages">
+          {loadingMessages && activeConversationId && (
+            <div className="chat-empty">Loading conversation…</div>
+          )}
+          {!loadingMessages && messages.length === 0 && (
+            <div className="chat-empty">Send a message to start the conversation.</div>
+          )}
+          {messages.map((msg, i) => (
+            <div key={msg.id ?? i} className={`message message-${msg.role}`}>
+              <div className="message-bubble">
+                {msg.content}
+                {msg.streaming && <span className="cursor">▊</span>}
+              </div>
             </div>
-          </div>
-        ))}
-        <div ref={bottomRef} />
-      </div>
+          ))}
+          <div ref={bottomRef} />
+        </div>
 
-      <form className="chat-input-area" onSubmit={handleSend}>
-        <input
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          placeholder={connected ? 'Type a message…' : 'Connecting…'}
-          disabled={!connected || sending}
-          autoFocus
-        />
-        <button type="submit" className="btn btn-primary" disabled={!connected || sending || !input.trim()}>
-          Send
-        </button>
-      </form>
+        <form className="chat-input-area" onSubmit={handleSend}>
+          <input
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            placeholder={connected ? 'Type a message…' : 'Connecting…'}
+            disabled={!connected || sending || creatingConversation}
+            autoFocus
+          />
+          <button type="submit" className="btn btn-primary" disabled={!connected || sending || creatingConversation || !input.trim()}>
+            Send
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

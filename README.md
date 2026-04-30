@@ -150,5 +150,21 @@ Services:
 - **Self-evolving bots**: RAG memory retrieval + conversation summarization + dynamic persona rewriting
 - **LLM providers**: Ollama (local), OpenAI, Google AI Studio — configurable per bot
 - **Telegram integration**: each bot can have its own Telegram token with a per-bot access whitelist
+- **Conversation threads**: chat is split into per-user conversations with titles updated from the latest discussed topic
+- **Continuation flow**: web UI shows all conversations and supports starting a new one; Telegram supports `/conversations` (or `/continue`) selection and `/new`
 - **Access control**: bot owner approves/denies web and Telegram users; unknown senders get rejected and queued for approval
-- **Full history**: all messages (web + Telegram) stored server-side, unified per bot+user pair
+- **Full history**: all messages (web + Telegram) stored server-side, scoped by bot+user+conversation
+
+---
+
+## Conversation APIs
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/bots/{botId}/conversations` | List current user's conversations for a bot |
+| `POST /api/bots/{botId}/conversations` | Start a new conversation |
+| `GET /api/bots/{botId}/conversations/{conversationId}/messages` | Load message history for a conversation |
+
+SignalR chat now accepts an optional conversation id:
+
+- `SendMessage(botId, content, conversationId?)`

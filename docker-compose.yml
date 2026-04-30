@@ -1,0 +1,62 @@
+services:
+  db:
+    image: ankane/pgvector:latest
+    environment:
+      POSTGRES_DB: achat
+      POSTGRES_USER: ${POSTGRES_USER:-achat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-achat} -d achat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+
+  api:
+    build:
+      context: ./src/backend
+      dockerfile: AChat.Api/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=achat;Username=${POSTGRES_USER:-achat};Password=${POSTGRES_PASSWORD}"
+      Jwt__Secret: ${JWT_SECRET:?JWT_SECRET is required}
+      Jwt__Issuer: ${JWT_ISSUER:-achat}
+      Jwt__Audience: ${JWT_AUDIENCE:-achat}
+      Jwt__ExpiresInMinutes: ${JWT_EXPIRES_IN_MINUTES:-60}
+      Encryption__Key: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      Telegram__WebhookBaseUrl: ${TELEGRAM_WEBHOOK_BASE_URL:?TELEGRAM_WEBHOOK_BASE_URL is required}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  worker:
+    build:
+      context: ./src/backend
+      dockerfile: AChat.Worker/Dockerfile
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=achat;Username=${POSTGRES_USER:-achat};Password=${POSTGRES_PASSWORD}"
+      Encryption__Key: ${ENCRYPTION_KEY}
+      Evolution__SummarizationThreshold: ${SUMMARIZATION_THRESHOLD:-50}
+      Evolution__SummarizationBatchSize: ${SUMMARIZATION_BATCH_SIZE:-30}
+      Evolution__PersonaEvolutionMessageInterval: ${PERSONA_EVOLUTION_MESSAGE_INTERVAL:-20}
+      Evolution__RecentMessageWindowSize: ${RECENT_MESSAGE_WINDOW_SIZE:-20}
+      Evolution__RagTopK: ${RAG_TOP_K:-5}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./src/frontend/achat-web
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+
+volumes:
+  pgdata:

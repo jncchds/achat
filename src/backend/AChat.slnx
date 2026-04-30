@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="AChat.Api/AChat.Api.csproj" />
+  <Project Path="AChat.Core/AChat.Core.csproj" />
+  <Project Path="AChat.Infrastructure/AChat.Infrastructure.csproj" />
+  <Project Path="AChat.Worker/AChat.Worker.csproj" />
+</Solution>

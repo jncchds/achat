@@ -1,0 +1,155 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+using AChat.Core.Entities;
+using AChat.Core.LLM;
+using AChat.Infrastructure;
+using AChat.Infrastructure.Data;
+using AChat.Infrastructure.LLM;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using Pgvector;
+
+namespace AChat.Api.Hubs;
+
+[Authorize]
+public class ChatHub : Hub
+{
+    private readonly AppDbContext _db;
+    private readonly ILLMProviderFactory _providerFactory;
+    private readonly EvolutionOptions _evolutionOptions;
+
+    public ChatHub(
+        AppDbContext db,
+        ILLMProviderFactory providerFactory,
+        IOptions<EvolutionOptions> evolutionOptions)
+    {
+        _db = db;
+        _providerFactory = providerFactory;
+        _evolutionOptions = evolutionOptions.Value;
+    }
+
+    public async Task SendMessage(Guid botId, string content)
+    {
+        var userId = GetUserId();
+        var ct = Context.ConnectionAborted;
+
+        // Load bot and verify access
+        var bot = await _db.Bots
+            .Include(b => b.LLMProviderPreset)
+            .Include(b => b.EmbeddingPreset)
+            .FirstOrDefaultAsync(b => b.Id == botId, ct);
+
+        if (bot is null)
+        {
+            await Clients.Caller.SendAsync("Error", "Bot not found.", ct);
+            return;
+        }
+
+        // Access check: owner is always allowed; others need BotAccessList(Allowed)
+        bool canAccess = bot.OwnerId == userId
+            || await _db.BotAccessLists.AnyAsync(a =>
+                a.BotId == botId
+                && a.SubjectType == AccessSubjectType.AchatUser
+                && a.SubjectId == userId.ToString()
+                && a.Status == AccessStatus.Allowed, ct);
+
+        if (!canAccess)
+        {
+            await Clients.Caller.SendAsync("Error", "Access denied.", ct);
+            return;
+        }
+
+        // Persist user message
+        var userMessage = new Message
+        {
+            Id = Guid.NewGuid(),
+            BotId = botId,
+            UserId = userId,
+            Role = MessageRole.User,
+            Content = content,
+            Source = MessageSource.Web,
+            CreatedAt = DateTime.UtcNow
+        };
+        _db.Messages.Add(userMessage);
+        await _db.SaveChangesAsync(ct);
+
+        // Generate query embedding if embedding preset is configured
+        float[]? queryEmbedding = null;
+        if (bot.EmbeddingPreset is not null)
+        {
+            try
+            {
+                var embeddingProvider = _providerFactory.GetEmbeddingProvider(bot.EmbeddingPreset);
+                queryEmbedding = await embeddingProvider.GenerateEmbeddingAsync(content, ct);
+                userMessage.Embedding = new Vector(queryEmbedding);
+                await _db.SaveChangesAsync(ct);
+            }
+            catch
+            {
+                // Embedding failure is non-fatal; proceed without RAG
+            }
+        }
+
+        // Build context
+        if (bot.LLMProviderPreset is null)
+        {
+            await Clients.Caller.SendAsync("Error", "Bot has no LLM preset configured.", ct);
+            return;
+        }
+
+        var contextBuilder = new ChatContextBuilder(
+            _db, _evolutionOptions.RagTopK, _evolutionOptions.RecentMessageWindowSize);
+
+        var chatRequest = await contextBuilder.BuildAsync(bot, userId, content, queryEmbedding, ct);
+
+        // Stream response
+        var chatProvider = _providerFactory.GetChatProvider(bot.LLMProviderPreset);
+        var responseTokens = new StringBuilder();
+
+        await foreach (var chunk in chatProvider.StreamChatAsync(chatRequest, ct))
+        {
+            responseTokens.Append(chunk);
+            await Clients.Caller.SendAsync("ReceiveToken", chunk, ct);
+        }
+
+        // Persist assistant message
+        var assistantMessage = new Message
+        {
+            Id = Guid.NewGuid(),
+            BotId = botId,
+            UserId = userId,
+            Role = MessageRole.Assistant,
+            Content = responseTokens.ToString(),
+            Source = MessageSource.Web,
+            CreatedAt = DateTime.UtcNow
+        };
+        _db.Messages.Add(assistantMessage);
+        await _db.SaveChangesAsync(ct);
+
+        // Generate embedding for assistant message
+        if (bot.EmbeddingPreset is not null && queryEmbedding is not null)
+        {
+            try
+            {
+                var embeddingProvider = _providerFactory.GetEmbeddingProvider(bot.EmbeddingPreset);
+                var assistantEmbedding = await embeddingProvider
+                    .GenerateEmbeddingAsync(assistantMessage.Content, ct);
+                assistantMessage.Embedding = new Vector(assistantEmbedding);
+                await _db.SaveChangesAsync(ct);
+            }
+            catch
+            {
+                // Non-fatal
+            }
+        }
+
+        await Clients.Caller.SendAsync("ReceiveMessageComplete", assistantMessage.Id, ct);
+    }
+
+    private Guid GetUserId() =>
+        Guid.Parse(Context.User!.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? Context.User!.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+}

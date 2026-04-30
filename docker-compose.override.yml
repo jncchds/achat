@@ -1,0 +1,27 @@
+services:
+  db:
+    environment:
+      POSTGRES_USER: achat
+      POSTGRES_PASSWORD: achat_dev
+    ports:
+      - "5432:5432"
+
+  api:
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=achat;Username=achat;Password=achat_dev"
+      Jwt__Secret: "dev-secret-at-least-32-chars-long!!"
+      Jwt__Issuer: "achat"
+      Jwt__Audience: "achat"
+      Encryption__Key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      Telegram__WebhookBaseUrl: "https://your-ngrok-url-here"
+    ports:
+      - "8080:8080"
+
+  worker:
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=achat;Username=achat;Password=achat_dev"
+      Encryption__Key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+volumes:
+  pgdata:

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { authApi } from '../api/auth';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -16,8 +16,8 @@ export function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      const { token } = await authApi.login(email, password);
-      login(token);
+      const { token, isAdmin } = await authApi.login(email, password);
+      login(token, isAdmin);
       navigate('/bots');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
@@ -45,7 +45,6 @@ export function LoginPage() {
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
-        <p className="auth-link">No account? <Link to="/register">Register</Link></p>
       </div>
     </div>
   );

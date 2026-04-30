@@ -18,7 +18,7 @@ const BOT_NAV = [
 
 export function Layout() {
   const [collapsed, setCollapsed] = useState(false);
-  const { logout } = useAuth();
+  const { logout, isAdmin } = useAuth();
   const navigate = useNavigate();
   const botMatch = useMatch('/bots/:id/*');
   const botId = botMatch?.params.id;
@@ -54,6 +54,17 @@ export function Layout() {
               {!collapsed && <span className="nav-label">{item.label}</span>}
             </NavLink>
           ))}
+
+          {isAdmin && (
+            <NavLink
+              to="/admin/users"
+              className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+              title={collapsed ? 'Admin' : undefined}
+            >
+              <span className="nav-icon">🛡️</span>
+              {!collapsed && <span className="nav-label">Admin</span>}
+            </NavLink>
+          )}
 
           {/* Bot sub-nav — hidden when collapsed, visible only on bot routes */}
           {!collapsed && botId && (

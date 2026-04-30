@@ -15,13 +15,10 @@ services:
       Jwt__Audience: "achat"
       Encryption__Key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
       Telegram__WebhookBaseUrl: "https://your-ngrok-url-here"
+      Admin__Email: "admin@achat.local"
+      Admin__Password: "admin"
     ports:
       - "8080:8080"
-
-  worker:
-    environment:
-      ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=achat;Username=achat;Password=achat_dev"
-      Encryption__Key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 volumes:
   pgdata:

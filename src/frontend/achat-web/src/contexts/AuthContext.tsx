@@ -3,10 +3,11 @@ import { createContext, useContext, useState, useCallback, type ReactNode } from
 interface AuthState {
   token: string | null;
   userId: string | null;
+  isAdmin: boolean;
 }
 
 interface AuthContextValue extends AuthState {
-  login: (token: string) => void;
+  login: (token: string, isAdmin: boolean) => void;
   logout: () => void;
 }
 
@@ -24,17 +25,20 @@ function parseUserId(token: string): string | null {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>(() => {
     const token = localStorage.getItem('achat_token');
-    return { token, userId: token ? parseUserId(token) : null };
+    const isAdmin = localStorage.getItem('achat_is_admin') === 'true';
+    return { token, userId: token ? parseUserId(token) : null, isAdmin };
   });
 
-  const login = useCallback((token: string) => {
+  const login = useCallback((token: string, isAdmin: boolean) => {
     localStorage.setItem('achat_token', token);
-    setState({ token, userId: parseUserId(token) });
+    localStorage.setItem('achat_is_admin', String(isAdmin));
+    setState({ token, userId: parseUserId(token), isAdmin });
   }, []);
 
   const logout = useCallback(() => {
     localStorage.removeItem('achat_token');
-    setState({ token: null, userId: null });
+    localStorage.removeItem('achat_is_admin');
+    setState({ token: null, userId: null, isAdmin: false });
   }, []);
 
   return (

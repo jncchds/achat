@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\AChat.Core\AChat.Core.csproj" />
     <ProjectReference Include="..\AChat.Infrastructure\AChat.Infrastructure.csproj" />
+    <ProjectReference Include="..\AChat.Worker\AChat.Worker.csproj" />
   </ItemGroup>
 
   <ItemGroup>

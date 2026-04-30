@@ -25,27 +25,6 @@ public class AuthController : ControllerBase
         _config = config;
     }
 
-    [HttpPost("register")]
-    public async Task<ActionResult<AuthResponse>> Register(RegisterRequest req, CancellationToken ct)
-    {
-        if (await _db.Users.AnyAsync(u => u.Email == req.Email, ct))
-            return Conflict("Email already in use.");
-
-        var user = new User
-        {
-            Id = Guid.NewGuid(),
-            Email = req.Email,
-            PasswordHash = HashPassword(req.Password),
-            IsStubAccount = false,
-            CreatedAt = DateTime.UtcNow
-        };
-
-        _db.Users.Add(user);
-        await _db.SaveChangesAsync(ct);
-
-        return Ok(new AuthResponse(GenerateToken(user), user.Id, user.Email));
-    }
-
     [HttpPost("login")]
     public async Task<ActionResult<AuthResponse>> Login(LoginRequest req, CancellationToken ct)
     {
@@ -55,7 +34,7 @@ public class AuthController : ControllerBase
         if (user is null || !VerifyPassword(req.Password, user.PasswordHash!))
             return Unauthorized("Invalid credentials.");
 
-        return Ok(new AuthResponse(GenerateToken(user), user.Id, user.Email));
+        return Ok(new AuthResponse(GenerateToken(user), user.Id, user.Email, user.IsAdmin));
     }
 
     [Authorize]
@@ -86,12 +65,14 @@ public class AuthController : ControllerBase
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
-        var claims = new[]
+        var claims = new List<Claim>
         {
             new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new Claim(JwtRegisteredClaimNames.Email, user.Email ?? string.Empty),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
+        if (user.IsAdmin)
+            claims.Add(new Claim("role", "admin"));
 
         var token = new JwtSecurityToken(issuer, audience, claims,
             expires: DateTime.UtcNow.AddMinutes(expiresInMinutes),

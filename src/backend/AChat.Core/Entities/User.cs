@@ -7,6 +7,7 @@ public class User
     public string? PasswordHash { get; set; }
     public long? TelegramId { get; set; }
     public bool IsStubAccount { get; set; }
+    public bool IsAdmin { get; set; }
     public DateTime CreatedAt { get; set; }
 
     public ICollection<LLMProviderPreset> Presets { get; set; } = [];

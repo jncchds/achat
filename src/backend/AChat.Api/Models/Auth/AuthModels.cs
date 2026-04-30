@@ -13,4 +13,4 @@ public record LoginRequest(
 public record SetTelegramIdRequest(
     [Required] long TelegramId);
 
-public record AuthResponse(string Token, Guid UserId, string? Email);
+public record AuthResponse(string Token, Guid UserId, string? Email, bool IsAdmin);

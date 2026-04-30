@@ -1,6 +1,6 @@
 import { apiFetch } from './client';
 
-export interface AuthResponse { token: string; }
+export interface AuthResponse { token: string; userId: string; email: string | null; isAdmin: boolean; }
 
 export const authApi = {
   register: (email: string, password: string) =>

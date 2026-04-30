@@ -1,10 +1,9 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AuthProvider } from './contexts/AuthContext';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { LoginPage } from './pages/LoginPage';
-import { RegisterPage } from './pages/RegisterPage';
 import { BotsPage } from './pages/BotsPage';
 import { BotSettingsPage } from './pages/BotSettingsPage';
 import { ChatPage } from './pages/ChatPage';
@@ -13,10 +12,16 @@ import { PersonaPage } from './pages/PersonaPage';
 import { AccessRequestsPage } from './pages/AccessRequestsPage';
 import { AccessListPage } from './pages/AccessListPage';
 import { ProfilePage } from './pages/ProfilePage';
+import { AdminUsersPage } from './pages/AdminUsersPage';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
 });
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { isAdmin } = useAuth();
+  return isAdmin ? <>{children}</> : <Navigate to="/bots" replace />;
+}
 
 export default function App() {
   return (
@@ -25,7 +30,6 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/register" element={<RegisterPage />} />
             <Route element={<ProtectedRoute />}>
               <Route element={<Layout />}>
                 <Route path="/bots" element={<BotsPage />} />
@@ -37,6 +41,7 @@ export default function App() {
                 <Route path="/bots/:id/access-list" element={<AccessListPage />} />
                 <Route path="/presets" element={<PresetsPage />} />
                 <Route path="/profile" element={<ProfilePage />} />
+                <Route path="/admin/users" element={<AdminRoute><AdminUsersPage /></AdminRoute>} />
               </Route>
             </Route>
             <Route path="*" element={<Navigate to="/bots" replace />} />

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
@@ -20,15 +21,33 @@ public class ChatHub : Hub
     private readonly AppDbContext _db;
     private readonly ILLMProviderFactory _providerFactory;
     private readonly EvolutionOptions _evolutionOptions;
+    private readonly IChatConnectionRegistry _connectionRegistry;
+
+    // Per-conversation semaphores to prevent concurrent LLM calls on the same conversation
+    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> _conversationLocks = new();
 
     public ChatHub(
         AppDbContext db,
         ILLMProviderFactory providerFactory,
-        IOptions<EvolutionOptions> evolutionOptions)
+        IOptions<EvolutionOptions> evolutionOptions,
+        IChatConnectionRegistry connectionRegistry)
     {
         _db = db;
         _providerFactory = providerFactory;
         _evolutionOptions = evolutionOptions.Value;
+        _connectionRegistry = connectionRegistry;
+    }
+
+    public override Task OnConnectedAsync()
+    {
+        _connectionRegistry.Register(GetUserId(), Context.ConnectionId);
+        return base.OnConnectedAsync();
+    }
+
+    public override Task OnDisconnectedAsync(Exception? exception)
+    {
+        _connectionRegistry.Unregister(GetUserId(), Context.ConnectionId);
+        return base.OnDisconnectedAsync(exception);
     }
 
     public async Task SendMessage(Guid botId, string content, Guid? conversationId = null)
@@ -85,7 +104,8 @@ public class ChatHub : Hub
         };
         _db.Messages.Add(userMessage);
 
-        conversation.Title = BuildConversationTitle(content);
+        if (conversation.Title == "New conversation")
+            conversation.Title = BuildConversationTitle(content);
         conversation.UpdatedAt = DateTime.UtcNow;
         conversation.LastMessageAt = DateTime.UtcNow;
 
@@ -115,63 +135,79 @@ public class ChatHub : Hub
             return;
         }
 
-        var contextBuilder = new ChatContextBuilder(
-            _db, _evolutionOptions.RagTopK, _evolutionOptions.RecentMessageWindowSize);
-
-        var chatRequest = await contextBuilder.BuildAsync(
-            bot,
-            userId,
-            conversation.Id,
-            content,
-            queryEmbedding,
-            ct);
-
-        // Stream response
-        var chatProvider = _providerFactory.GetChatProvider(bot.LLMProviderPreset);
-        var responseTokens = new StringBuilder();
-
-        await foreach (var chunk in chatProvider.StreamChatAsync(chatRequest, ct))
+        // Acquire per-conversation lock to prevent concurrent LLM calls on the same conversation.
+        // If already processing, reject immediately rather than queuing indefinitely.
+        var convLock = _conversationLocks.GetOrAdd(conversation.Id, _ => new SemaphoreSlim(1, 1));
+        if (!await convLock.WaitAsync(0, ct))
         {
-            responseTokens.Append(chunk);
-            await Clients.Caller.SendAsync("ReceiveToken", chunk, ct);
+            await Clients.Caller.SendAsync("Error", "Still processing previous message. Please wait.", ct);
+            return;
         }
 
-        // Persist assistant message
-        var assistantMessage = new Message
+        try
         {
-            Id = Guid.NewGuid(),
-            BotId = botId,
-            UserId = userId,
-            ConversationId = conversation.Id,
-            Role = MessageRole.Assistant,
-            Content = responseTokens.ToString(),
-            Source = MessageSource.Web,
-            CreatedAt = DateTime.UtcNow
-        };
-        _db.Messages.Add(assistantMessage);
+            var contextBuilder = new ChatContextBuilder(
+                _db, _evolutionOptions.RagTopK, _evolutionOptions.RecentMessageWindowSize);
 
-        conversation.UpdatedAt = DateTime.UtcNow;
-        conversation.LastMessageAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
+            var chatRequest = await contextBuilder.BuildAsync(
+                bot,
+                userId,
+                conversation.Id,
+                content,
+                queryEmbedding,
+                ct);
 
-        // Generate embedding for assistant message
-        if (bot.EmbeddingPreset is not null && queryEmbedding is not null)
-        {
-            try
+            // Stream response
+            var chatProvider = _providerFactory.GetChatProvider(bot.LLMProviderPreset);
+            var responseTokens = new StringBuilder();
+
+            await foreach (var chunk in chatProvider.StreamChatAsync(chatRequest, ct))
             {
-                var embeddingProvider = _providerFactory.GetEmbeddingProvider(bot.EmbeddingPreset);
-                var assistantEmbedding = await embeddingProvider
-                    .GenerateEmbeddingAsync(assistantMessage.Content, ct);
-                assistantMessage.Embedding = new Vector(assistantEmbedding);
-                await _db.SaveChangesAsync(ct);
+                responseTokens.Append(chunk);
+                await Clients.Caller.SendAsync("ReceiveToken", chunk, ct);
             }
-            catch
+
+            // Persist assistant message
+            var assistantMessage = new Message
             {
-                // Non-fatal
+                Id = Guid.NewGuid(),
+                BotId = botId,
+                UserId = userId,
+                ConversationId = conversation.Id,
+                Role = MessageRole.Assistant,
+                Content = responseTokens.ToString(),
+                Source = MessageSource.Web,
+                CreatedAt = DateTime.UtcNow
+            };
+            _db.Messages.Add(assistantMessage);
+
+            conversation.UpdatedAt = DateTime.UtcNow;
+            conversation.LastMessageAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+
+            // Generate embedding for assistant message
+            if (bot.EmbeddingPreset is not null && queryEmbedding is not null)
+            {
+                try
+                {
+                    var embeddingProvider = _providerFactory.GetEmbeddingProvider(bot.EmbeddingPreset);
+                    var assistantEmbedding = await embeddingProvider
+                        .GenerateEmbeddingAsync(assistantMessage.Content, ct);
+                    assistantMessage.Embedding = new Vector(assistantEmbedding);
+                    await _db.SaveChangesAsync(ct);
+                }
+                catch
+                {
+                    // Non-fatal
+                }
             }
+
+            await Clients.Caller.SendAsync("ReceiveMessageComplete", assistantMessage.Id, ct);
         }
-
-        await Clients.Caller.SendAsync("ReceiveMessageComplete", assistantMessage.Id, ct);
+        finally
+        {
+            convLock.Release();
+        }
     }
 
     private async Task<BotConversation?> ResolveConversationAsync(

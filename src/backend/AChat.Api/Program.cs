@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using AChat.Api.Hubs;
+using AChat.Api.Services;
 using AChat.Core.Entities;
 using AChat.Core.LLM;
 using AChat.Core.Services;
@@ -71,6 +72,12 @@ builder.Services.AddAuthorization(options =>
 });
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
+
+// Connection registry (singleton — tracks live SignalR connections per user)
+builder.Services.AddSingleton<IChatConnectionRegistry, ChatConnectionRegistry>();
+
+// Bot-initiated message service
+builder.Services.AddScoped<IBotInitiatedMessageService, BotInitiatedMessageService>();
 
 // Evolution options
 builder.Services.Configure<EvolutionOptions>(builder.Configuration.GetSection("Evolution"));

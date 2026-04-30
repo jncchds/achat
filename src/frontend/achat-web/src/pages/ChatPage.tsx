@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type FormEvent } from 'react';
+import { useState, useEffect, useRef, useCallback, type FormEvent } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as signalR from '@microsoft/signalr';
@@ -26,6 +26,14 @@ export function ChatPage() {
   const connRef = useRef<signalR.HubConnection | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const queryClient = useQueryClient();
+
+  // Refs so connection event handlers always see the latest values without stale closures
+  const sendingRef = useRef(false);
+  const activeConversationIdRef = useRef<string | null>(null);
+
+  // Keep refs in sync with state
+  useEffect(() => { sendingRef.current = sending; }, [sending]);
+  useEffect(() => { activeConversationIdRef.current = activeConversationId; }, [activeConversationId]);
 
   const { data: bot } = useQuery({
     queryKey: ['bot', botId],
@@ -75,6 +83,8 @@ export function ChatPage() {
     }
   }, [conversationMessages, activeConversationId, sending]);
 
+  // Build and start the hub connection once per token/botId — NOT per conversation.
+  // activeConversationId is read via ref inside handlers to avoid tearing down the socket.
   useEffect(() => {
     const conn = new signalR.HubConnectionBuilder()
       .withUrl(HUB_URL, { accessTokenFactory: () => token ?? '' })
@@ -100,12 +110,18 @@ export function ChatPage() {
       });
       setSending(false);
       queryClient.invalidateQueries({ queryKey: ['conversations', botId] });
-      if (activeConversationId) {
-        queryClient.invalidateQueries({ queryKey: ['conversation-messages', botId, activeConversationId] });
+      const convId = activeConversationIdRef.current;
+      if (convId) {
+        queryClient.invalidateQueries({ queryKey: ['conversation-messages', botId, convId] });
       }
     });
 
     conn.on('ConversationResolved', (conversationId: string) => {
+      setActiveConversationId(conversationId);
+    });
+
+    conn.on('BotInitiatedMessageStart', (_botId: string, conversationId: string) => {
+      // Switch to the conversation the bot is speaking into, if it's a different one
       setActiveConversationId(conversationId);
     });
 
@@ -114,17 +130,49 @@ export function ChatPage() {
       setSending(false);
     });
 
-    conn.onclose(() => setConnected(false));
+    conn.onclose(() => {
+      setConnected(false);
+      // Unstick the send state if the connection dropped mid-stream
+      if (sendingRef.current) {
+        setSending(false);
+        setMessages(prev => {
+          const last = prev[prev.length - 1];
+          const withComplete = last?.streaming
+            ? [...prev.slice(0, -1), { ...last, streaming: false }]
+            : prev;
+          return [...withComplete, { role: 'assistant', content: '⚠️ Disconnected mid-response.' }];
+        });
+      }
+    });
+
     conn.onreconnected(() => setConnected(true));
     conn.start().then(() => setConnected(true)).catch(console.error);
 
     connRef.current = conn;
     return () => { conn.stop(); };
-  }, [token, queryClient, botId, activeConversationId]);
+  }, [token, queryClient, botId]); // activeConversationId intentionally excluded
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const handleStop = useCallback(async () => {
+    const conn = connRef.current;
+    if (!conn) return;
+
+    // Seal the partial message immediately so the user sees what was received
+    setMessages(prev => {
+      const last = prev[prev.length - 1];
+      return last?.streaming
+        ? [...prev.slice(0, -1), { ...last, streaming: false }]
+        : prev;
+    });
+    setSending(false);
+
+    // Stopping the connection triggers ConnectionAborted on the server, which cancels the stream.
+    // withAutomaticReconnect will then reconnect automatically.
+    await conn.stop();
+  }, []);
 
   const handleSend = async (e: FormEvent) => {
     e.preventDefault();
@@ -235,9 +283,15 @@ export function ChatPage() {
             disabled={!connected || sending || creatingConversation}
             autoFocus
           />
-          <button type="submit" className="btn btn-primary" disabled={!connected || sending || creatingConversation || !input.trim()}>
-            Send
-          </button>
+          {sending ? (
+            <button type="button" className="btn btn-secondary" onClick={handleStop}>
+              Stop
+            </button>
+          ) : (
+            <button type="submit" className="btn btn-primary" disabled={!connected || creatingConversation || !input.trim()}>
+              Send
+            </button>
+          )}
         </form>
       </div>
     </div>

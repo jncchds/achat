@@ -1,3 +1,4 @@
+using AChat.Core.Services;
 using AChat.Infrastructure;
 using AChat.Core.Entities;
 using AChat.Core.LLM;
@@ -49,6 +50,7 @@ public class PersonaEvolutionWorker : BackgroundService
         await using var scope = _scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var factory = scope.ServiceProvider.GetRequiredService<ILLMProviderFactory>();
+        var initiatedMessageService = scope.ServiceProvider.GetRequiredService<IBotInitiatedMessageService>();
 
         // Find bots with enough new messages since the last persona snapshot
         var bots = await db.Bots
@@ -60,7 +62,19 @@ public class PersonaEvolutionWorker : BackgroundService
         {
             try
             {
-                await MaybeEvolveAsync(db, factory, bot, ct);
+                var evolved = await MaybeEvolveAsync(db, factory, bot, ct);
+                if (evolved && _opts.BotInitiatesAfterEvolution)
+                {
+                    try
+                    {
+                        await initiatedMessageService.SendInitiatedMessageAsync(
+                            bot.Id, bot.OwnerId, _opts.BotInitiationPrompt, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Bot-initiated message failed for bot {BotId} after evolution.", bot.Id);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -69,17 +83,17 @@ public class PersonaEvolutionWorker : BackgroundService
         }
     }
 
-    private async Task MaybeEvolveAsync(
+    private async Task<bool> MaybeEvolveAsync(
         AppDbContext db,
         ILLMProviderFactory factory,
         Bot bot,
         CancellationToken ct)
     {
-        if (bot.LLMProviderPreset is null) return;
+        if (bot.LLMProviderPreset is null) return false;
 
         // Resolve the owner's internal user record
         var ownerUser = await db.Users.FirstOrDefaultAsync(u => u.Id == bot.OwnerId, ct);
-        if (ownerUser is null) return;
+        if (ownerUser is null) return false;
 
         // Get the CreatedAt of the latest snapshot, if any
         var lastSnapshot = await db.BotPersonaSnapshots
@@ -95,7 +109,7 @@ public class PersonaEvolutionWorker : BackgroundService
             query = query.Where(m => m.CreatedAt > lastSnapshot.Value);
 
         var newMessageCount = await query.CountAsync(ct);
-        if (newMessageCount < _opts.PersonaEvolutionMessageInterval) return;
+        if (newMessageCount < _opts.PersonaEvolutionMessageInterval) return false;
 
         // Gather recent owner messages (both sides of the conversation, but owner-scoped)
         var recentMessages = await db.Messages
@@ -165,5 +179,7 @@ public class PersonaEvolutionWorker : BackgroundService
 
         _logger.LogInformation(
             "Evolved persona for bot {BotId} ({BotName}).", bot.Id, bot.Name);
+
+        return true;
     }
 }

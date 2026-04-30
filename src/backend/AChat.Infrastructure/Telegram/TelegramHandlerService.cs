@@ -149,7 +149,8 @@ public class TelegramHandlerService
         };
         _db.Messages.Add(userMsg);
 
-        conversation.Title = BuildConversationTitle(message.Text);
+        if (conversation.Title == "New conversation")
+            conversation.Title = BuildConversationTitle(message.Text);
         conversation.UpdatedAt = DateTime.UtcNow;
         conversation.LastMessageAt = DateTime.UtcNow;
 

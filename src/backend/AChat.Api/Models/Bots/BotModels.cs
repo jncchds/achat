@@ -20,6 +20,8 @@ public record UpdateBotRequest(
     Guid? EmbeddingPresetId,
     string? TelegramBotToken);
 
+public record PersonaPushRequest([Required] string Direction);
+
 public record BotResponse(
     Guid Id,
     string Name,
@@ -27,6 +29,8 @@ public record BotResponse(
     string? Gender,
     string CharacterDescription,
     string EvolvingPersonaPrompt,
+    string? PersonaPushText,
+    int PersonaPushRemainingCycles,
     Guid? LLMProviderPresetId,
     Guid? EmbeddingPresetId,
     bool HasTelegramToken,

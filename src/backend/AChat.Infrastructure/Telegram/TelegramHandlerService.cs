@@ -4,6 +4,7 @@ using AChat.Core.Services;
 using AChat.Infrastructure.Data;
 using AChat.Infrastructure.LLM;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Pgvector;
 using Telegram.Bot;
 using Telegram.Bot.Types;
@@ -20,6 +21,7 @@ public class TelegramHandlerService
     private readonly AppDbContext _db;
     private readonly ILLMProviderFactory _providerFactory;
     private readonly IEncryptionService _encryption;
+    private readonly EvolutionOptions _evolutionOptions;
     private readonly int _ragTopK;
     private readonly int _recentWindowSize;
 
@@ -27,12 +29,14 @@ public class TelegramHandlerService
         AppDbContext db,
         ILLMProviderFactory providerFactory,
         IEncryptionService encryption,
+        IOptions<EvolutionOptions> evolutionOptions,
         int ragTopK = 5,
         int recentWindowSize = 20)
     {
         _db = db;
         _providerFactory = providerFactory;
         _encryption = encryption;
+        _evolutionOptions = evolutionOptions.Value;
         _ragTopK = ragTopK;
         _recentWindowSize = recentWindowSize;
     }
@@ -412,9 +416,65 @@ public class TelegramHandlerService
 
         if (command is "/start")
         {
+            var isOwner = user.Id == bot.OwnerId;
+            var helpText = "Commands:\n/new — start a new conversation\n/conversations — choose a conversation to continue";
+            if (isOwner)
+                helpText += "\n\n*Owner commands:*\n/persona \\<direction\\> — nudge the bot's personality toward a direction\n/resetpersona — revert the evolved persona back to the original character";
             await telegramClient.SendMessage(
                 message.Chat.Id,
-                "Commands:\n/new — start a new conversation\n/conversations — choose a conversation to continue",
+                helpText,
+                parseMode: ParseMode.MarkdownV2,
+                cancellationToken: ct);
+            return true;
+        }
+
+        // ── Owner-only commands ──────────────────────────────────────────
+
+        if (command is "/persona" or "/resetpersona")
+        {
+            if (user.Id != bot.OwnerId)
+            {
+                await telegramClient.SendMessage(
+                    message.Chat.Id,
+                    "Only the bot owner can use this command.",
+                    cancellationToken: ct);
+                return true;
+            }
+
+            if (command is "/resetpersona")
+            {
+                bot.EvolvingPersonaPrompt = bot.CharacterDescription;
+                bot.PersonaPushText = null;
+                bot.PersonaPushRemainingCycles = 0;
+                bot.UpdatedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync(ct);
+
+                await telegramClient.SendMessage(
+                    message.Chat.Id,
+                    "✅ Persona has been reset to the original character description.",
+                    cancellationToken: ct);
+                return true;
+            }
+
+            // /persona <direction>
+            var parts = message.Text!.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2 || string.IsNullOrWhiteSpace(parts[1]))
+            {
+                await telegramClient.SendMessage(
+                    message.Chat.Id,
+                    "Usage: /persona <direction>\nExample: /persona become more sarcastic and witty",
+                    cancellationToken: ct);
+                return true;
+            }
+
+            bot.PersonaPushText = parts[1].Trim();
+            bot.PersonaPushRemainingCycles = _evolutionOptions.PersonaPushDecayCycles;
+            bot.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+
+            await telegramClient.SendMessage(
+                message.Chat.Id,
+                $"✅ Persona push set for {bot.PersonaPushRemainingCycles} evolution cycles:\n\"{bot.PersonaPushText}\"",
                 cancellationToken: ct);
             return true;
         }

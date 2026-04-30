@@ -87,8 +87,8 @@ builder.Services.AddScoped<TelegramHandlerService>(sp =>
     var db = sp.GetRequiredService<AppDbContext>();
     var factory = sp.GetRequiredService<ILLMProviderFactory>();
     var enc = sp.GetRequiredService<IEncryptionService>();
-    var opts = sp.GetRequiredService<IOptions<EvolutionOptions>>().Value;
-    return new TelegramHandlerService(db, factory, enc, opts.RagTopK, opts.RecentMessageWindowSize);
+    var opts = sp.GetRequiredService<IOptions<EvolutionOptions>>();
+    return new TelegramHandlerService(db, factory, enc, opts, opts.Value.RagTopK, opts.Value.RecentMessageWindowSize);
 });
 
 // Background workers

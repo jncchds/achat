@@ -7,4 +7,5 @@ public class EvolutionOptions
     public int PersonaEvolutionMessageInterval { get; set; } = 20;
     public int RecentMessageWindowSize { get; set; } = 20;
     public int RagTopK { get; set; } = 5;
+    public int PersonaPushDecayCycles { get; set; } = 3;
 }

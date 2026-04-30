@@ -7,6 +7,8 @@ export interface Bot {
   gender: string | null;
   characterDescription: string;
   evolvingPersonaPrompt: string;
+  personaPushText: string | null;
+  personaPushRemainingCycles: number;
   llmProviderPresetId: string | null;
   embeddingPresetId: string | null;
   hasTelegramToken: boolean;
@@ -56,4 +58,10 @@ export const botsApi = {
 
   personaHistory: (id: string, token: string) =>
     apiFetch<PersonaSnapshot[]>(`/api/bots/${id}/persona-history`, {}, token),
+
+  personaPush: (id: string, direction: string, token: string) =>
+    apiFetch<Bot>(`/api/bots/${id}/persona-push`, { method: 'POST', body: JSON.stringify({ direction }) }, token),
+
+  clearPersonaPush: (id: string, token: string) =>
+    apiFetch<void>(`/api/bots/${id}/persona-push`, { method: 'DELETE' }, token),
 };

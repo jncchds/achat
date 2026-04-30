@@ -3,11 +3,13 @@ using System.Security.Claims;
 using AChat.Api.Models.Bots;
 using AChat.Core.Entities;
 using AChat.Core.Services;
+using AChat.Infrastructure;
 using AChat.Infrastructure.Data;
 using AChat.Infrastructure.Telegram;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace AChat.Api.Controllers;
 
@@ -18,11 +20,13 @@ public class BotsController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly IEncryptionService _encryption;
+    private readonly EvolutionOptions _evolutionOptions;
 
-    public BotsController(AppDbContext db, IEncryptionService encryption)
+    public BotsController(AppDbContext db, IEncryptionService encryption, IOptions<EvolutionOptions> evolutionOptions)
     {
         _db = db;
         _encryption = encryption;
+        _evolutionOptions = evolutionOptions.Value;
     }
 
     [HttpGet]
@@ -119,7 +123,14 @@ public class BotsController : ControllerBase
         if (req.Name is not null) bot.Name = req.Name;
         if (req.Age.HasValue) bot.Age = req.Age;
         if (req.Gender is not null) bot.Gender = req.Gender;
-        if (req.CharacterDescription is not null) bot.CharacterDescription = req.CharacterDescription;
+        if (req.CharacterDescription is not null && req.CharacterDescription != bot.CharacterDescription)
+        {
+            bot.CharacterDescription = req.CharacterDescription;
+            // Changing the foundation reseeds the evolved persona and clears any active push
+            bot.EvolvingPersonaPrompt = req.CharacterDescription;
+            bot.PersonaPushText = null;
+            bot.PersonaPushRemainingCycles = 0;
+        }
         if (req.LLMProviderPresetId.HasValue) bot.LLMProviderPresetId = req.LLMProviderPresetId;
         if (req.EmbeddingPresetId.HasValue) bot.EmbeddingPresetId = req.EmbeddingPresetId;
 
@@ -178,6 +189,34 @@ public class BotsController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("{id:guid}/persona-push")]
+    public async Task<IActionResult> PersonaPush(Guid id, PersonaPushRequest req, CancellationToken ct)
+    {
+        var bot = await _db.Bots.FindAsync([id], ct);
+        if (bot is null || bot.OwnerId != GetUserId()) return NotFound();
+
+        bot.PersonaPushText = req.Direction;
+        bot.PersonaPushRemainingCycles = _evolutionOptions.PersonaPushDecayCycles;
+        bot.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        return Ok(ToResponse(bot));
+    }
+
+    [HttpDelete("{id:guid}/persona-push")]
+    public async Task<IActionResult> ClearPersonaPush(Guid id, CancellationToken ct)
+    {
+        var bot = await _db.Bots.FindAsync([id], ct);
+        if (bot is null || bot.OwnerId != GetUserId()) return NotFound();
+
+        bot.PersonaPushText = null;
+        bot.PersonaPushRemainingCycles = 0;
+        bot.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        return NoContent();
+    }
+
     [HttpGet("{id:guid}/persona-history")]
     public async Task<IActionResult> GetPersonaHistory(Guid id, CancellationToken ct)
     {
@@ -211,6 +250,7 @@ public class BotsController : ControllerBase
     private static BotResponse ToResponse(Bot b) => new(
         b.Id, b.Name, b.Age, b.Gender,
         b.CharacterDescription, b.EvolvingPersonaPrompt,
+        b.PersonaPushText, b.PersonaPushRemainingCycles,
         b.LLMProviderPresetId, b.EmbeddingPresetId,
         HasTelegramToken: b.EncryptedTelegramBotToken is not null,
         b.CreatedAt, b.UpdatedAt);

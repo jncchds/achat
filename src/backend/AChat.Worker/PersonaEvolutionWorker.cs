@@ -77,6 +77,10 @@ public class PersonaEvolutionWorker : BackgroundService
     {
         if (bot.LLMProviderPreset is null) return;
 
+        // Resolve the owner's internal user record
+        var ownerUser = await db.Users.FirstOrDefaultAsync(u => u.Id == bot.OwnerId, ct);
+        if (ownerUser is null) return;
+
         // Get the CreatedAt of the latest snapshot, if any
         var lastSnapshot = await db.BotPersonaSnapshots
             .Where(s => s.BotId == bot.Id)
@@ -84,38 +88,51 @@ public class PersonaEvolutionWorker : BackgroundService
             .Select(s => (DateTime?)s.CreatedAt)
             .FirstOrDefaultAsync(ct);
 
-        // Count messages since last evolution
-        var query = db.Messages.Where(m => m.BotId == bot.Id);
+        // Count owner messages since last evolution (only owner drives drift)
+        var query = db.Messages
+            .Where(m => m.BotId == bot.Id && m.UserId == ownerUser.Id && m.Role == MessageRole.User);
         if (lastSnapshot.HasValue)
             query = query.Where(m => m.CreatedAt > lastSnapshot.Value);
 
         var newMessageCount = await query.CountAsync(ct);
         if (newMessageCount < _opts.PersonaEvolutionMessageInterval) return;
 
-        // Gather recent messages for analysis
+        // Gather recent owner messages (both sides of the conversation, but owner-scoped)
         var recentMessages = await db.Messages
-            .Where(m => m.BotId == bot.Id && m.Role != MessageRole.System)
+            .Where(m => m.BotId == bot.Id && m.UserId == ownerUser.Id && m.Role != MessageRole.System)
             .OrderByDescending(m => m.CreatedAt)
             .Take(_opts.RecentMessageWindowSize)
             .OrderBy(m => m.CreatedAt)
             .ToListAsync(ct);
 
         var conversation = string.Join("\n", recentMessages
-            .Select(m => $"{(m.Role == MessageRole.User ? "User" : "Bot")}: {m.Content}"));
+            .Select(m => $"{(m.Role == MessageRole.User ? "Owner" : "Bot")}: {m.Content}"));
+
+        // Build push clause if active
+        var pushClause = string.Empty;
+        if (!string.IsNullOrWhiteSpace(bot.PersonaPushText))
+            pushClause = $"\n\nThe bot owner has requested that the bot lean toward the following direction (apply this meaningfully, not literally): {bot.PersonaPushText}";
 
         var evolveRequest = new LLMChatRequest
         {
-            SystemPrompt = "You are a persona writer. Based on recent conversations, " +
-                           "update and refine the chatbot's personality description. " +
-                           "Return only the updated persona description. Keep it concise (2-4 paragraphs).",
+            SystemPrompt = "You are a persona writer for a self-evolving chatbot. " +
+                           "Your task is to update the bot's personality description based on its recent interactions with its owner. " +
+                           "Rules:\n" +
+                           "- The core character traits described in [Character Foundation] are stable ground — preserve their spirit.\n" +
+                           "- Drift the bot's style, vocabulary, recurring topics, and emotional tone naturally toward the patterns observed in the owner's messages.\n" +
+                           "- Do NOT make the bot blindly mimic the owner. The bot must keep its own voice.\n" +
+                           "- Do NOT add traits that contradict the foundation without strong evidence in the conversations.\n" +
+                           "- Return only the updated persona description (2–4 paragraphs). No headings, no meta-commentary.",
             Messages =
             [
                 new ChatMessage
                 {
                     Role = "user",
-                    Content = $"Current persona:\n{bot.EvolvingPersonaPrompt}\n\n" +
-                              $"Recent conversations:\n{conversation}\n\n" +
-                              "Write an updated persona that reflects the patterns in these conversations."
+                    Content = $"[Character Foundation]\n{bot.CharacterDescription}\n\n" +
+                              $"[Current Evolved Persona]\n{bot.EvolvingPersonaPrompt}\n\n" +
+                              $"[Recent Owner Conversations]\n{conversation}" +
+                              pushClause +
+                              "\n\nWrite the updated persona."
                 }
             ]
         };
@@ -135,6 +152,14 @@ public class PersonaEvolutionWorker : BackgroundService
         // Update bot's evolving persona
         bot.EvolvingPersonaPrompt = newPersona;
         bot.UpdatedAt = DateTime.UtcNow;
+
+        // Decay the persona push
+        if (bot.PersonaPushRemainingCycles > 0)
+        {
+            bot.PersonaPushRemainingCycles--;
+            if (bot.PersonaPushRemainingCycles == 0)
+                bot.PersonaPushText = null;
+        }
 
         await db.SaveChangesAsync(ct);
 

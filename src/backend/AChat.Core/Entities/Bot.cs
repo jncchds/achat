@@ -12,6 +12,8 @@ public class Bot
     public Guid? LLMProviderPresetId { get; set; }
     public Guid? EmbeddingPresetId { get; set; }
     public string? EncryptedTelegramBotToken { get; set; }
+    public string? PersonaPushText { get; set; }
+    public int PersonaPushRemainingCycles { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 

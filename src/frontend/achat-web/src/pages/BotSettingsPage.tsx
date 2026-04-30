@@ -15,6 +15,7 @@ export function BotSettingsPage() {
   const [age, setAge] = useState('');
   const [gender, setGender] = useState('');
   const [characterDescription, setCharacterDescription] = useState('');
+  const [originalCharacterDescription, setOriginalCharacterDescription] = useState('');
   const [llmPresetId, setLlmPresetId] = useState('');
   const [embeddingPresetId, setEmbeddingPresetId] = useState('');
   const [telegramToken, setTelegramToken] = useState('');
@@ -38,6 +39,7 @@ export function BotSettingsPage() {
       setAge(bot.age?.toString() ?? '');
       setGender(bot.gender ?? '');
       setCharacterDescription(bot.characterDescription);
+      setOriginalCharacterDescription(bot.characterDescription);
       setLlmPresetId(bot.llmProviderPresetId ?? '');
       setEmbeddingPresetId(bot.embeddingPresetId ?? '');
     }
@@ -46,6 +48,15 @@ export function BotSettingsPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
+
+    // Warn when CharacterDescription changes on an existing bot — it resets the evolved persona
+    if (!isNew && characterDescription !== originalCharacterDescription) {
+      const confirmed = window.confirm(
+        'Changing the Character Description will reset the evolved persona back to this new description and clear any active persona push. Continue?'
+      );
+      if (!confirmed) return;
+    }
+
     setLoading(true);
     try {
       if (isNew) {

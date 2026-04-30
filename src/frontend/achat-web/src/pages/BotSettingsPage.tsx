@@ -1,7 +1,7 @@
 import { useState, useEffect, type FormEvent } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { botsApi, type CreateBotRequest, type UpdateBotRequest } from '../api/bots';
+import { botsApi, CURATED_PERSONAS, type CreateBotRequest, type UpdateBotRequest } from '../api/bots';
 import { presetsApi } from '../api/presets';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -21,6 +21,7 @@ export function BotSettingsPage() {
   const [telegramToken, setTelegramToken] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [randomizing, setRandomizing] = useState(false);
 
   const { data: bot } = useQuery({
     queryKey: ['bot', id],
@@ -44,6 +45,25 @@ export function BotSettingsPage() {
       setEmbeddingPresetId(bot.embeddingPresetId ?? '');
     }
   }, [bot]);
+
+  const handleRandomize = async () => {
+    setRandomizing(true);
+    try {
+      if (llmPresetId) {
+        const result = await botsApi.randomizePersona(llmPresetId, token!);
+        setCharacterDescription(result.characterDescription);
+      } else {
+        // Curated fallback — pick one different from what's currently shown
+        const options = CURATED_PERSONAS.filter(p => p !== characterDescription);
+        const pick = options[Math.floor(Math.random() * options.length)];
+        setCharacterDescription(pick);
+      }
+    } catch {
+      // silently ignore; user can retry
+    } finally {
+      setRandomizing(false);
+    }
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -117,7 +137,18 @@ export function BotSettingsPage() {
           </div>
 
           <div className="form-group">
-            <label>Character Description *</label>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
+              <label style={{ marginBottom: 0 }}>Character Description *</label>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleRandomize}
+                disabled={randomizing}
+                title={llmPresetId ? 'Generate a random persona using your LLM preset' : 'Pick a random archetype (select an LLM preset to use AI generation)'}
+              >
+                {randomizing ? 'Generating…' : characterDescription ? '↺ Randomize again' : '✦ Randomize'}
+              </button>
+            </div>
             <textarea
               value={characterDescription}
               onChange={e => setCharacterDescription(e.target.value)}

@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using AChat.Api.Models.Bots;
 using AChat.Core.Entities;
+using AChat.Core.LLM;
 using AChat.Core.Services;
 using AChat.Infrastructure;
 using AChat.Infrastructure.Data;
@@ -21,12 +22,77 @@ public class BotsController : ControllerBase
     private readonly AppDbContext _db;
     private readonly IEncryptionService _encryption;
     private readonly EvolutionOptions _evolutionOptions;
+    private readonly ILLMProviderFactory _llmFactory;
 
-    public BotsController(AppDbContext db, IEncryptionService encryption, IOptions<EvolutionOptions> evolutionOptions)
+    public BotsController(
+        AppDbContext db,
+        IEncryptionService encryption,
+        IOptions<EvolutionOptions> evolutionOptions,
+        ILLMProviderFactory llmFactory)
     {
         _db = db;
         _encryption = encryption;
         _evolutionOptions = evolutionOptions.Value;
+        _llmFactory = llmFactory;
+    }
+
+    [HttpPost("randomize-persona")]
+    public async Task<ActionResult<RandomizePersonaResponse>> RandomizePersona(
+        RandomizePersonaRequest req,
+        CancellationToken ct)
+    {
+        var userId = GetUserId();
+
+        if (!req.PresetId.HasValue)
+            return BadRequest("PresetId is required for LLM-generated personas.");
+
+        var preset = await _db.LLMProviderPresets
+            .FirstOrDefaultAsync(p => p.Id == req.PresetId && p.UserId == userId, ct);
+        if (preset is null)
+            return BadRequest("Preset not found or does not belong to this user.");
+
+        // Use a random archetype seed to ensure variety across calls
+        var seeds = new[]
+        {
+            "an eccentric scientist obsessed with a niche field",
+            "a weathered traveller who has lived in many cultures",
+            "a retired performer with a flair for drama",
+            "a quiet introvert with surprisingly deep opinions",
+            "a mischievous trickster who enjoys wordplay",
+            "a stoic philosopher with dry wit",
+            "an enthusiastic collector of obscure knowledge",
+            "a warm mentor who speaks in metaphors",
+            "a cynical realist with a hidden soft side",
+            "a dreamer who romanticises the mundane",
+            "a sharp-tongued critic who secretly craves connection",
+            "an over-eager helper prone to tangents",
+            "a gruff but fair old sailor",
+            "a whimsical poet with a chaotic worldview",
+            "a pragmatic engineer who sees everything as a system",
+        };
+        var seed = seeds[Random.Shared.Next(seeds.Length)];
+
+        var chatRequest = new LLMChatRequest
+        {
+            SystemPrompt = "You are a creative character writer. Generate a unique, vivid chatbot personality description. " +
+                           "Include: distinctive traits, quirks, communication style, background hints, and what topics interest them. " +
+                           "Write in second-person-free prose (do not use 'you'). " +
+                           "Keep it 2–3 paragraphs. Return only the description — no titles, no meta-commentary.",
+            Messages =
+            [
+                new ChatMessage
+                {
+                    Role = "user",
+                    Content = $"Create a chatbot character inspired by this seed concept: {seed}. " +
+                               "Make it original — the seed is just a starting spark, not a constraint."
+                }
+            ]
+        };
+
+        var provider = _llmFactory.GetChatProvider(preset);
+        var description = await provider.GenerateChatAsync(chatRequest, ct);
+
+        return Ok(new RandomizePersonaResponse(description.Trim()));
     }
 
     [HttpGet]

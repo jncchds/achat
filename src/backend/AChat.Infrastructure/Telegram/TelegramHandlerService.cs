@@ -38,6 +38,12 @@ public class TelegramHandlerService
 
     public async Task HandleUpdateAsync(Guid botId, Update update, CancellationToken ct = default)
     {
+        if (update.CallbackQuery is { } callbackQuery)
+        {
+            await HandleCallbackQueryAsync(botId, callbackQuery, ct);
+            return;
+        }
+
         if (update.Message is not { } message) return;
         if (message.Text is null) return;
 
@@ -185,6 +191,132 @@ public class TelegramHandlerService
         }
 
         await telegramClient.SendMessage(message.Chat.Id, responseText, cancellationToken: ct);
+    }
+
+    private async Task HandleCallbackQueryAsync(Guid botId, CallbackQuery callbackQuery, CancellationToken ct)
+    {
+        var data = callbackQuery.Data;
+        if (data is null) return;
+
+        // Format: "approve:{botId}:{telegramUserId}" or "deny:{botId}:{telegramUserId}"
+        var parts = data.Split(':');
+        if (parts.Length != 3) return;
+        if (!Guid.TryParse(parts[1], out var callbackBotId)) return;
+        if (!long.TryParse(parts[2], out var requesterTelegramId)) return;
+
+        // Only handle callbacks intended for this bot's webhook
+        if (callbackBotId != botId) return;
+
+        var action = parts[0]; // "approve" or "deny"
+
+        var bot = await _db.Bots.FirstOrDefaultAsync(b => b.Id == botId, ct);
+        if (bot?.EncryptedTelegramBotToken is null) return;
+
+        var rawToken = _encryption.Decrypt(bot.EncryptedTelegramBotToken);
+        var telegramClient = new TelegramBotClient(rawToken);
+
+        // Verify the callback sender is the bot owner
+        var owner = await _db.Users.FirstOrDefaultAsync(u => u.Id == bot.OwnerId, ct);
+        if (owner?.TelegramId != callbackQuery.From.Id) return;
+
+        var subjectId = requesterTelegramId.ToString();
+
+        // Find the pending request
+        var request = await _db.BotAccessRequests.FirstOrDefaultAsync(
+            r => r.BotId == botId
+                 && r.SubjectType == AccessSubjectType.TelegramUser
+                 && r.SubjectId == subjectId
+                 && r.Status == AccessRequestStatus.Pending, ct);
+
+        if (request is null)
+        {
+            await telegramClient.AnswerCallbackQuery(callbackQuery.Id,
+                "Request no longer pending.", cancellationToken: ct);
+            return;
+        }
+
+        // Upsert access list entry
+        var accessEntry = await _db.BotAccessLists.FirstOrDefaultAsync(
+            a => a.BotId == botId
+                 && a.SubjectType == AccessSubjectType.TelegramUser
+                 && a.SubjectId == subjectId, ct);
+
+        string resultText;
+
+        if (action == "approve")
+        {
+            request.Status = AccessRequestStatus.Approved;
+            request.ResolvedAt = DateTime.UtcNow;
+            request.ResolvedByUserId = owner.Id;
+
+            if (accessEntry is null)
+            {
+                _db.BotAccessLists.Add(new BotAccessList
+                {
+                    Id = Guid.NewGuid(),
+                    BotId = botId,
+                    SubjectType = AccessSubjectType.TelegramUser,
+                    SubjectId = subjectId,
+                    Status = AccessStatus.Allowed
+                });
+            }
+            else
+            {
+                accessEntry.Status = AccessStatus.Allowed;
+            }
+
+            // Create stub user if none exists
+            if (!await _db.Users.AnyAsync(u => u.TelegramId == requesterTelegramId, ct))
+            {
+                _db.Users.Add(new DomainUser
+                {
+                    Id = Guid.NewGuid(),
+                    TelegramId = requesterTelegramId,
+                    IsStubAccount = true,
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
+
+            resultText = $"✅ Approved access for {request.DisplayName ?? subjectId}";
+        }
+        else // deny
+        {
+            request.Status = AccessRequestStatus.Denied;
+            request.ResolvedAt = DateTime.UtcNow;
+            request.ResolvedByUserId = owner.Id;
+
+            if (accessEntry is null)
+            {
+                _db.BotAccessLists.Add(new BotAccessList
+                {
+                    Id = Guid.NewGuid(),
+                    BotId = botId,
+                    SubjectType = AccessSubjectType.TelegramUser,
+                    SubjectId = subjectId,
+                    Status = AccessStatus.Denied
+                });
+            }
+            else
+            {
+                accessEntry.Status = AccessStatus.Denied;
+            }
+
+            resultText = $"❌ Denied access for {request.DisplayName ?? subjectId}";
+        }
+
+        await _db.SaveChangesAsync(ct);
+
+        // Acknowledge the button press and update the message
+        await telegramClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: ct);
+
+        if (callbackQuery.Message is not null)
+        {
+            await telegramClient.EditMessageText(
+                callbackQuery.Message.Chat.Id,
+                callbackQuery.Message.MessageId,
+                resultText,
+                cancellationToken: ct);
+        }
     }
 
     private async Task NotifyOwnerAsync(

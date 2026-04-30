@@ -7,6 +7,7 @@ public record CreateBotRequest(
     int? Age,
     string? Gender,
     [Required] string CharacterDescription,
+    string? PreferredLanguage,
     Guid? LLMProviderPresetId,
     Guid? EmbeddingPresetId,
     string? TelegramBotToken);
@@ -16,6 +17,7 @@ public record UpdateBotRequest(
     int? Age,
     string? Gender,
     string? CharacterDescription,
+    string? PreferredLanguage,
     Guid? LLMProviderPresetId,
     Guid? EmbeddingPresetId,
     string? TelegramBotToken);
@@ -35,6 +37,7 @@ public record BotResponse(
     string EvolvingPersonaPrompt,
     string? PersonaPushText,
     int PersonaPushRemainingCycles,
+    string? PreferredLanguage,
     Guid? LLMProviderPresetId,
     Guid? EmbeddingPresetId,
     bool HasTelegramToken,

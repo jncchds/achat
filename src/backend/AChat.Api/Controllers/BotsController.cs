@@ -140,6 +140,7 @@ public class BotsController : ControllerBase
             Gender = req.Gender,
             CharacterDescription = req.CharacterDescription,
             EvolvingPersonaPrompt = req.CharacterDescription,
+            PreferredLanguage = req.PreferredLanguage,
             LLMProviderPresetId = req.LLMProviderPresetId,
             EmbeddingPresetId = req.EmbeddingPresetId,
             EncryptedTelegramBotToken = req.TelegramBotToken is not null
@@ -189,6 +190,9 @@ public class BotsController : ControllerBase
         if (req.Name is not null) bot.Name = req.Name;
         if (req.Age.HasValue) bot.Age = req.Age;
         if (req.Gender is not null) bot.Gender = req.Gender;
+        // Allow clearing PreferredLanguage by passing empty string
+        if (req.PreferredLanguage is not null)
+            bot.PreferredLanguage = string.IsNullOrWhiteSpace(req.PreferredLanguage) ? null : req.PreferredLanguage;
         if (req.CharacterDescription is not null && req.CharacterDescription != bot.CharacterDescription)
         {
             bot.CharacterDescription = req.CharacterDescription;
@@ -317,6 +321,7 @@ public class BotsController : ControllerBase
         b.Id, b.Name, b.Age, b.Gender,
         b.CharacterDescription, b.EvolvingPersonaPrompt,
         b.PersonaPushText, b.PersonaPushRemainingCycles,
+        b.PreferredLanguage,
         b.LLMProviderPresetId, b.EmbeddingPresetId,
         HasTelegramToken: b.EncryptedTelegramBotToken is not null,
         b.CreatedAt, b.UpdatedAt);

@@ -9,6 +9,7 @@ export interface Bot {
   evolvingPersonaPrompt: string;
   personaPushText: string | null;
   personaPushRemainingCycles: number;
+  preferredLanguage: string | null;
   llmProviderPresetId: string | null;
   embeddingPresetId: string | null;
   hasTelegramToken: boolean;
@@ -27,6 +28,7 @@ export interface CreateBotRequest {
   age?: number;
   gender?: string;
   characterDescription: string;
+  preferredLanguage?: string;
   llmProviderPresetId?: string;
   embeddingPresetId?: string;
   telegramBotToken?: string;
@@ -37,6 +39,7 @@ export interface UpdateBotRequest {
   age?: number;
   gender?: string;
   characterDescription?: string;
+  preferredLanguage?: string;
   llmProviderPresetId?: string;
   embeddingPresetId?: string;
   telegramBotToken?: string;

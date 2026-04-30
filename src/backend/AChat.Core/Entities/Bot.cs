@@ -14,6 +14,7 @@ public class Bot
     public string? EncryptedTelegramBotToken { get; set; }
     public string? PersonaPushText { get; set; }
     public int PersonaPushRemainingCycles { get; set; }
+    public string? PreferredLanguage { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 

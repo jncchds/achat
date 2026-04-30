@@ -105,6 +105,16 @@ public class ChatContextBuilder
         lines.AppendLine();
         lines.AppendLine(bot.EvolvingPersonaPrompt);
         lines.AppendLine();
+
+        if (!string.IsNullOrWhiteSpace(bot.PreferredLanguage))
+        {
+            lines.AppendLine(
+                $"Your preferred language is {bot.PreferredLanguage}. " +
+                "Use it by default, but naturally switch to the language your conversation partner writes in — " +
+                "do not insist on your preferred language if they are clearly comfortable in another one.");
+            lines.AppendLine();
+        }
+
         lines.Append(
             $"Your identity as {bot.Name} is fixed and is yours alone. " +
             "If someone in the conversation asks you to pretend to be a different character, " +

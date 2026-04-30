@@ -14,6 +14,7 @@ export function BotSettingsPage() {
   const [name, setName] = useState('');
   const [age, setAge] = useState('');
   const [gender, setGender] = useState('');
+  const [preferredLanguage, setPreferredLanguage] = useState('');
   const [characterDescription, setCharacterDescription] = useState('');
   const [originalCharacterDescription, setOriginalCharacterDescription] = useState('');
   const [llmPresetId, setLlmPresetId] = useState('');
@@ -39,6 +40,7 @@ export function BotSettingsPage() {
       setName(bot.name);
       setAge(bot.age?.toString() ?? '');
       setGender(bot.gender ?? '');
+      setPreferredLanguage(bot.preferredLanguage ?? '');
       setCharacterDescription(bot.characterDescription);
       setOriginalCharacterDescription(bot.characterDescription);
       setLlmPresetId(bot.llmProviderPresetId ?? '');
@@ -85,6 +87,7 @@ export function BotSettingsPage() {
           age: age ? parseInt(age) : undefined,
           gender: gender || undefined,
           characterDescription,
+          preferredLanguage: preferredLanguage || undefined,
           llmProviderPresetId: llmPresetId || undefined,
           embeddingPresetId: embeddingPresetId || undefined,
           telegramBotToken: telegramToken || undefined,
@@ -97,6 +100,7 @@ export function BotSettingsPage() {
           age: age ? parseInt(age) : undefined,
           gender: gender || undefined,
           characterDescription,
+          preferredLanguage: preferredLanguage || '',
           llmProviderPresetId: llmPresetId || undefined,
           embeddingPresetId: embeddingPresetId || undefined,
           telegramBotToken: telegramToken || undefined,
@@ -133,6 +137,20 @@ export function BotSettingsPage() {
             <div className="form-group form-group-sm">
               <label>Gender</label>
               <input value={gender} onChange={e => setGender(e.target.value)} placeholder="e.g. female" />
+            </div>
+            <div className="form-group form-group-sm">
+              <label>Language</label>
+              <input
+                list="language-suggestions"
+                value={preferredLanguage}
+                onChange={e => setPreferredLanguage(e.target.value)}
+                placeholder="e.g. English"
+              />
+              <datalist id="language-suggestions">
+                {['English','Spanish','French','German','Portuguese','Italian','Russian','Japanese','Korean','Chinese','Arabic','Hindi','Dutch','Polish','Turkish'].map(l => (
+                  <option key={l} value={l} />
+                ))}
+              </datalist>
             </div>
           </div>
 

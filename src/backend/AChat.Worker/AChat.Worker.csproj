@@ -16,4 +16,11 @@
     <ProjectReference Include="..\AChat.Core\AChat.Core.csproj" />
     <ProjectReference Include="..\AChat.Infrastructure\AChat.Infrastructure.csproj" />
   </ItemGroup>
+
+  <!-- Prevent appsettings from being published when this project is referenced by AChat.Api -->
+  <ItemGroup>
+    <Content Update="appsettings*.json">
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

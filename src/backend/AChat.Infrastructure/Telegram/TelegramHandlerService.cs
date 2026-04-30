@@ -1,12 +1,10 @@
 using AChat.Core.Entities;
 using AChat.Core.LLM;
-using AChat.Core.Services;
 using AChat.Infrastructure.Data;
 using AChat.Infrastructure.LLM;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Pgvector;
-using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
@@ -20,7 +18,7 @@ public class TelegramHandlerService
 {
     private readonly AppDbContext _db;
     private readonly ILLMProviderFactory _providerFactory;
-    private readonly IEncryptionService _encryption;
+    private readonly ITelegramRequestDispatcher _dispatcher;
     private readonly EvolutionOptions _evolutionOptions;
     private readonly int _ragTopK;
     private readonly int _recentWindowSize;
@@ -28,14 +26,14 @@ public class TelegramHandlerService
     public TelegramHandlerService(
         AppDbContext db,
         ILLMProviderFactory providerFactory,
-        IEncryptionService encryption,
+        ITelegramRequestDispatcher dispatcher,
         IOptions<EvolutionOptions> evolutionOptions,
         int ragTopK = 5,
         int recentWindowSize = 20)
     {
         _db = db;
         _providerFactory = providerFactory;
-        _encryption = encryption;
+        _dispatcher = dispatcher;
         _evolutionOptions = evolutionOptions.Value;
         _ragTopK = ragTopK;
         _recentWindowSize = recentWindowSize;
@@ -62,9 +60,6 @@ public class TelegramHandlerService
 
         if (bot?.EncryptedTelegramBotToken is null) return;
 
-        var rawToken = _encryption.Decrypt(bot.EncryptedTelegramBotToken);
-        var telegramClient = new TelegramBotClient(rawToken);
-
         // Look up access status
         var accessEntry = await _db.BotAccessLists.FirstOrDefaultAsync(
             a => a.BotId == botId
@@ -80,10 +75,11 @@ public class TelegramHandlerService
         if (accessEntry?.Status != AccessStatus.Allowed)
         {
             // Unknown sender
-            await telegramClient.SendMessage(
+            await _dispatcher.EnqueueSendMessageAsync(
+                botId,
                 message.Chat.Id,
                 "I don't know you, go away",
-                cancellationToken: ct);
+                ct: ct);
 
             // Create access request if not already pending
             var existing = await _db.BotAccessRequests.AnyAsync(
@@ -107,7 +103,7 @@ public class TelegramHandlerService
                 await _db.SaveChangesAsync(ct);
 
                 // Notify owner with inline Approve/Deny keyboard
-                await NotifyOwnerAsync(telegramClient, bot, telegramUserId.Value,
+                await NotifyOwnerAsync(bot, telegramUserId.Value,
                     message.From?.Username ?? message.From?.FirstName, ct);
             }
             return;
@@ -130,14 +126,14 @@ public class TelegramHandlerService
 
         if (message.Text.StartsWith('/'))
         {
-            var handled = await HandleTelegramCommandAsync(bot, user, message, telegramClient, ct);
+            var handled = await HandleTelegramCommandAsync(bot, user, message, ct);
             if (handled) return;
         }
 
         var conversation = await ResolveConversationForTelegramAsync(bot.Id, user.Id, ct);
 
         // Send typing action
-        await telegramClient.SendChatAction(message.Chat.Id, ChatAction.Typing, cancellationToken: ct);
+        await _dispatcher.EnqueueSendChatActionAsync(botId, message.Chat.Id, ChatAction.Typing, ct);
 
         // Persist user message
         var userMsg = new DomainMessage
@@ -219,7 +215,7 @@ public class TelegramHandlerService
             catch { /* non-fatal */ }
         }
 
-        await telegramClient.SendMessage(message.Chat.Id, responseText, cancellationToken: ct);
+        await _dispatcher.EnqueueSendMessageAsync(botId, message.Chat.Id, responseText, ct: ct);
     }
 
     private async Task HandleCallbackQueryAsync(Guid botId, CallbackQuery callbackQuery, CancellationToken ct)
@@ -247,9 +243,6 @@ public class TelegramHandlerService
         var bot = await _db.Bots.FirstOrDefaultAsync(b => b.Id == botId, ct);
         if (bot?.EncryptedTelegramBotToken is null) return;
 
-        var rawToken = _encryption.Decrypt(bot.EncryptedTelegramBotToken);
-        var telegramClient = new TelegramBotClient(rawToken);
-
         // Verify the callback sender is the bot owner
         var owner = await _db.Users.FirstOrDefaultAsync(u => u.Id == bot.OwnerId, ct);
         if (owner?.TelegramId != callbackQuery.From.Id) return;
@@ -265,8 +258,11 @@ public class TelegramHandlerService
 
         if (request is null)
         {
-            await telegramClient.AnswerCallbackQuery(callbackQuery.Id,
-                "Request no longer pending.", cancellationToken: ct);
+            await _dispatcher.EnqueueAnswerCallbackQueryAsync(
+                botId,
+                callbackQuery.Id,
+                "Request no longer pending.",
+                ct);
             return;
         }
 
@@ -342,15 +338,16 @@ public class TelegramHandlerService
         await _db.SaveChangesAsync(ct);
 
         // Acknowledge the button press and update the message
-        await telegramClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: ct);
+        await _dispatcher.EnqueueAnswerCallbackQueryAsync(botId, callbackQuery.Id, ct: ct);
 
         if (callbackQuery.Message is not null)
         {
-            await telegramClient.EditMessageText(
+            await _dispatcher.EnqueueEditMessageTextAsync(
+                botId,
                 callbackQuery.Message.Chat.Id,
                 callbackQuery.Message.MessageId,
                 resultText,
-                cancellationToken: ct);
+                ct);
         }
     }
 
@@ -358,7 +355,6 @@ public class TelegramHandlerService
         AChat.Core.Entities.Bot bot,
         DomainUser user,
         TelegramMessage message,
-        TelegramBotClient telegramClient,
         CancellationToken ct)
     {
         var command = message.Text!.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries)[0].ToLowerInvariant();
@@ -366,10 +362,11 @@ public class TelegramHandlerService
         if (command is "/new" or "/newconversation" or "/new_conversation")
         {
             var conversation = await CreateNewConversationAsync(bot.Id, user.Id, "New conversation", ct);
-            await telegramClient.SendMessage(
+            await _dispatcher.EnqueueSendMessageAsync(
+                bot.Id,
                 message.Chat.Id,
                 $"🆕 Started a new conversation: {conversation.Title}",
-                cancellationToken: ct);
+                ct: ct);
             return true;
         }
 
@@ -386,10 +383,11 @@ public class TelegramHandlerService
 
             if (conversations.Count == 0)
             {
-                await telegramClient.SendMessage(
+                await _dispatcher.EnqueueSendMessageAsync(
+                    bot.Id,
                     message.Chat.Id,
                     "You don't have any conversations yet. Use /new to start one.",
-                    cancellationToken: ct);
+                    ct: ct);
                 return true;
             }
 
@@ -405,11 +403,12 @@ public class TelegramHandlerService
                 })
                 .ToArray();
 
-            await telegramClient.SendMessage(
+            await _dispatcher.EnqueueSendMessageAsync(
+                bot.Id,
                 message.Chat.Id,
                 "Pick a conversation to continue:",
                 replyMarkup: new InlineKeyboardMarkup(keyboardRows),
-                cancellationToken: ct);
+                ct: ct);
 
             return true;
         }
@@ -420,11 +419,12 @@ public class TelegramHandlerService
             var helpText = "Commands:\n/new — start a new conversation\n/conversations — choose a conversation to continue";
             if (isOwner)
                 helpText += "\n\n*Owner commands:*\n/persona \\<direction\\> — nudge the bot's personality toward a direction\n/resetpersona — revert the evolved persona back to the original character";
-            await telegramClient.SendMessage(
+            await _dispatcher.EnqueueSendMessageAsync(
+                bot.Id,
                 message.Chat.Id,
                 helpText,
                 parseMode: ParseMode.MarkdownV2,
-                cancellationToken: ct);
+                ct: ct);
             return true;
         }
 
@@ -434,10 +434,11 @@ public class TelegramHandlerService
         {
             if (user.Id != bot.OwnerId)
             {
-                await telegramClient.SendMessage(
+                await _dispatcher.EnqueueSendMessageAsync(
+                    bot.Id,
                     message.Chat.Id,
                     "Only the bot owner can use this command.",
-                    cancellationToken: ct);
+                    ct: ct);
                 return true;
             }
 
@@ -449,10 +450,11 @@ public class TelegramHandlerService
                 bot.UpdatedAt = DateTime.UtcNow;
                 await _db.SaveChangesAsync(ct);
 
-                await telegramClient.SendMessage(
+                await _dispatcher.EnqueueSendMessageAsync(
+                    bot.Id,
                     message.Chat.Id,
                     "✅ Persona has been reset to the original character description.",
-                    cancellationToken: ct);
+                    ct: ct);
                 return true;
             }
 
@@ -460,10 +462,11 @@ public class TelegramHandlerService
             var parts = message.Text!.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length < 2 || string.IsNullOrWhiteSpace(parts[1]))
             {
-                await telegramClient.SendMessage(
+                await _dispatcher.EnqueueSendMessageAsync(
+                    bot.Id,
                     message.Chat.Id,
                     "Usage: /persona <direction>\nExample: /persona become more sarcastic and witty",
-                    cancellationToken: ct);
+                    ct: ct);
                 return true;
             }
 
@@ -472,10 +475,11 @@ public class TelegramHandlerService
             bot.UpdatedAt = DateTime.UtcNow;
             await _db.SaveChangesAsync(ct);
 
-            await telegramClient.SendMessage(
+            await _dispatcher.EnqueueSendMessageAsync(
+                bot.Id,
                 message.Chat.Id,
                 $"✅ Persona push set for {bot.PersonaPushRemainingCycles} evolution cycles:\n\"{bot.PersonaPushText}\"",
-                cancellationToken: ct);
+                ct: ct);
             return true;
         }
 
@@ -496,13 +500,10 @@ public class TelegramHandlerService
         var bot = await _db.Bots.FirstOrDefaultAsync(b => b.Id == botId, ct);
         if (bot?.EncryptedTelegramBotToken is null) return;
 
-        var rawToken = _encryption.Decrypt(bot.EncryptedTelegramBotToken);
-        var telegramClient = new TelegramBotClient(rawToken);
-
         var user = await _db.Users.FirstOrDefaultAsync(u => u.TelegramId == callbackQuery.From.Id, ct);
         if (user is null)
         {
-            await telegramClient.AnswerCallbackQuery(callbackQuery.Id, "Unknown user.", cancellationToken: ct);
+            await _dispatcher.EnqueueAnswerCallbackQueryAsync(botId, callbackQuery.Id, "Unknown user.", ct);
             return;
         }
 
@@ -514,7 +515,7 @@ public class TelegramHandlerService
 
         if (!canUse)
         {
-            await telegramClient.AnswerCallbackQuery(callbackQuery.Id, "Access denied.", cancellationToken: ct);
+            await _dispatcher.EnqueueAnswerCallbackQueryAsync(botId, callbackQuery.Id, "Access denied.", ct);
             return;
         }
 
@@ -523,22 +524,23 @@ public class TelegramHandlerService
 
         if (conversation is null)
         {
-            await telegramClient.AnswerCallbackQuery(callbackQuery.Id, "Conversation not found.", cancellationToken: ct);
+            await _dispatcher.EnqueueAnswerCallbackQueryAsync(botId, callbackQuery.Id, "Conversation not found.", ct);
             return;
         }
 
         await UpsertConversationStateAsync(botId, user.Id, conversation.Id, ct);
         await _db.SaveChangesAsync(ct);
 
-        await telegramClient.AnswerCallbackQuery(callbackQuery.Id, "Conversation selected.", cancellationToken: ct);
+        await _dispatcher.EnqueueAnswerCallbackQueryAsync(botId, callbackQuery.Id, "Conversation selected.", ct);
 
         if (callbackQuery.Message is not null)
         {
-            await telegramClient.EditMessageText(
+            await _dispatcher.EnqueueEditMessageTextAsync(
+                botId,
                 callbackQuery.Message.Chat.Id,
                 callbackQuery.Message.MessageId,
                 $"✅ Active conversation: {conversation.Title}",
-                cancellationToken: ct);
+                ct);
         }
     }
 
@@ -638,7 +640,6 @@ public class TelegramHandlerService
 
 
     private async Task NotifyOwnerAsync(
-        TelegramBotClient client,
         AChat.Core.Entities.Bot bot,
         long requesterTelegramId,
         string? displayName,
@@ -659,11 +660,12 @@ public class TelegramHandlerService
             }
         });
 
-        await client.SendMessage(
+        await _dispatcher.EnqueueSendMessageAsync(
+            bot.Id,
             owner.TelegramId.Value,
             text,
             parseMode: ParseMode.Markdown,
             replyMarkup: keyboard,
-            cancellationToken: ct);
+            ct: ct);
     }
 }

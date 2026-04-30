@@ -93,6 +93,17 @@ All variables can be set in `.env` (Docker Compose) or `appsettings.json` / envi
 | `Jwt__Audience` | JWT audience (default: `AChat`) | No |
 | `Jwt__ExpiresInMinutes` | Token lifetime in minutes (default: `1440`) | No |
 | `Encryption__Key` | AES-256 key as Base64-encoded 32 bytes | Yes |
+| `Telegram__WebhookBaseUrl` | Public base URL Telegram should call for webhooks | Yes (for Telegram bots) |
+| `Telegram__RateLimiting__Enabled` | Enable/disable Telegram global limiter + dispatcher queue | No |
+| `Telegram__RateLimiting__GlobalInboundPerSecond` | Global inbound webhook admission rate | No |
+| `Telegram__RateLimiting__GlobalInboundBurst` | Inbound burst bucket capacity | No |
+| `Telegram__RateLimiting__GlobalOutboundPerSecond` | Global outbound Telegram API call rate | No |
+| `Telegram__RateLimiting__GlobalOutboundBurst` | Outbound global burst capacity | No |
+| `Telegram__RateLimiting__PerBotOutboundPerSecond` | Outbound rate cap per bot | No |
+| `Telegram__RateLimiting__PerBotOutboundBurst` | Outbound burst cap per bot | No |
+| `Telegram__RateLimiting__QueueCapacity` | Soft capacity threshold for durable Telegram outbound queue | No |
+| `Telegram__RateLimiting__MaxRetryAttempts` | Max retries for Telegram `429` requeue handling | No |
+| `Telegram__RateLimiting__DefaultRetryAfterSeconds` | Fallback retry delay when Telegram omits retry-after | No |
 | `Evolution__SummarizationThreshold` | Messages before summarization triggers (default: `50`) | No |
 | `Evolution__PersonaEvolutionMessageInterval` | Messages between persona updates (default: `20`) | No |
 
@@ -106,8 +117,8 @@ achat/
 │   ├── backend/
 │   │   ├── AChat.Core/          # Domain models, interfaces (no infrastructure deps)
 │   │   ├── AChat.Infrastructure/# EF Core, LLM providers, Telegram, encryption
-│   │   ├── AChat.Api/           # Web API + SignalR hubs + controllers
-│   │   └── AChat.Worker/        # Background workers (summarization, persona evolution)
+│   │   ├── AChat.Api/           # Web API + SignalR hubs + controllers + hosted background workers
+│   │   └── AChat.Worker/        # Legacy/compat host (workers now embedded in API)
 │   └── frontend/
 │       └── achat-web/           # React 19 + TypeScript + Vite
 ├── docker-compose.yml
@@ -138,9 +149,8 @@ docker compose up --build
 ```
 
 Services:
-- `postgres` — PostgreSQL 16 + pgvector on port `5432`
-- `api` — AChat API on port `5000`
-- `web` — React app served by nginx on port `80`
+- `db` — PostgreSQL 16 + pgvector on port `5432`
+- `api` — AChat API (includes summarization and persona evolution hosted workers)
 
 ---
 
@@ -150,6 +160,7 @@ Services:
 - **Self-evolving bots**: RAG memory retrieval + conversation summarization + dynamic persona rewriting
 - **LLM providers**: Ollama (local), OpenAI, Google AI Studio — configurable per bot
 - **Telegram integration**: each bot can have its own Telegram token with a per-bot access whitelist
+- **Telegram protection**: global/per-bot Telegram request limiting with durable DB-backed outbound queue and retry/backoff for Telegram `429`
 - **Conversation threads**: chat is split into per-user conversations with titles updated from the latest discussed topic
 - **Continuation flow**: web UI shows all conversations and supports starting a new one; Telegram supports `/conversations` (or `/continue`) selection and `/new`
 - **Access control**: bot owner approves/denies web and Telegram users; unknown senders get rejected and queued for approval

@@ -8,7 +8,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace AChat.Worker;
+namespace AChat.Api.Workers;
 
 public class PersonaEvolutionWorker : BackgroundService
 {

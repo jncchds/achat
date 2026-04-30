@@ -15,20 +15,26 @@ public class TelegramController : ControllerBase
     private readonly AppDbContext _db;
     private readonly TelegramHandlerService _handler;
     private readonly IEncryptionService _encryption;
+    private readonly ITelegramRequestDispatcher _dispatcher;
 
     public TelegramController(
         AppDbContext db,
         TelegramHandlerService handler,
-        IEncryptionService encryption)
+        IEncryptionService encryption,
+        ITelegramRequestDispatcher dispatcher)
     {
         _db = db;
         _handler = handler;
         _encryption = encryption;
+        _dispatcher = dispatcher;
     }
 
     [HttpPost("webhook/{botId:guid}")]
     public async Task<IActionResult> Webhook(Guid botId, CancellationToken ct)
     {
+        if (!_dispatcher.TryAcquireInboundToken())
+            return StatusCode(StatusCodes.Status429TooManyRequests);
+
         // Validate the secret token header (last 10 chars of the bot token)
         if (!Request.Headers.TryGetValue("X-Telegram-Bot-Api-Secret-Token", out var secretHeader))
             return Unauthorized();

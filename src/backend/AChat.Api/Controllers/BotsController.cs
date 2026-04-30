@@ -250,10 +250,27 @@ public class BotsController : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
-    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        Guid id,
+        [FromServices] ITelegramWebhookService webhookService,
+        CancellationToken ct)
     {
         var bot = await _db.Bots.FindAsync([id], ct);
         if (bot is null || bot.OwnerId != GetUserId()) return NotFound();
+
+        if (bot.EncryptedTelegramBotToken is not null)
+        {
+            try
+            {
+                var rawToken = _encryption.Decrypt(bot.EncryptedTelegramBotToken);
+                await webhookService.DeleteWebhookAsync(rawToken, ct);
+            }
+            catch
+            {
+                // non-fatal: still delete local bot record
+            }
+        }
+
         _db.Bots.Remove(bot);
         await _db.SaveChangesAsync(ct);
         return NoContent();

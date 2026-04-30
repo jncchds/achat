@@ -9,8 +9,8 @@ Keep it up to date whenever architecture, domain models, API surface, project st
 
 AChat is a multi-user platform for self-evolving chatbots. Users own bots that adapt their personality over time using three mechanisms:
 1. **RAG memory** — pgvector cosine-similarity retrieval of relevant past messages per conversation
-2. **Conversation summarization** — background worker compresses old history into rolling summaries
-3. **Dynamic persona evolution** — background worker periodically rewrites the bot's personality based on interaction patterns
+2. **Conversation summarization** — hosted background task compresses old history into rolling summaries
+3. **Dynamic persona evolution** — hosted background task periodically rewrites the bot's personality based on interaction patterns
 
 Bots are accessible via a React web UI and optionally via their own dedicated Telegram bot.
 
@@ -31,14 +31,13 @@ achat/
 │   │   │   ├── Data/                # AppDbContext, AppDbContextFactory, Migrations/
 │   │   │   ├── LLM/                 # OllamaProvider, OpenAIProvider, GoogleAIStudioProvider, LLMProviderFactory
 │   │   │   ├── Security/            # AesEncryptionService
-│   │   │   └── Telegram/            # TelegramWebhookService, TelegramHandlerService
-│   │   ├── AChat.Api/               # ASP.NET Core 10 Web API + SignalR
+│   │   │   └── Telegram/            # TelegramWebhookService, TelegramHandlerService, TelegramRequestDispatcher
+│   │   ├── AChat.Api/               # ASP.NET Core 10 Web API + SignalR + hosted workers
 │   │   │   ├── Controllers/         # AuthController, PresetsController, BotsController, ConversationsController, AccessController, TelegramController
 │   │   │   ├── Hubs/                # ChatHub (SignalR)
-│   │   │   └── Models/              # Request/response DTOs
-│   │   └── AChat.Worker/            # IHostedService background workers
-│   │       ├── SummarizationWorker.cs
-│   │       └── PersonaEvolutionWorker.cs
+│   │   │   ├── Models/              # Request/response DTOs
+│   │   │   └── Workers/             # SummarizationWorker, PersonaEvolutionWorker
+│   │   └── AChat.Worker/            # Legacy compatibility host (workers run in API)
 │   └── frontend/
 │       └── achat-web/               # React 19 + TypeScript + Vite
 ├── docker-compose.yml
@@ -64,6 +63,7 @@ achat/
 | `BotPersonaSnapshot` | BotId, SnapshotText — immutable audit log of persona changes |
 | `BotAccessList` | BotId, SubjectType (AchatUser/TelegramUser), SubjectId (string), Status (Allowed/Denied) |
 | `BotAccessRequest` | BotId, SubjectType, SubjectId, DisplayName?, Status (Pending/Approved/Denied), ResolvedByUserId? |
+| `TelegramOutboundMessage` | BotId, CommandType, payload fields (ChatId/Text/etc.), AttemptCount, AvailableAt, LastError |
 
 **Access control applies to both web and Telegram.**  
 Bot owner is always implicitly allowed on web. Owner is auto-added to `BotAccessList(Allowed)` when `EncryptedTelegramBotToken` is first set.
@@ -158,6 +158,8 @@ MIT
 
 - Each `Bot` has its own optional Telegram bot token
 - Webhook: `POST /api/telegram/webhook/{botId}` — registered/updated via Telegram `setWebhook` API dynamically when token is saved
+- Inbound webhook requests are globally admission-limited via `Telegram:RateLimiting`
+- Outbound Telegram API calls are rate-limited (global + per-bot) and dispatched via durable DB-backed queue with retry on Telegram `429`
 - **Unknown sender** → reply "I don't know you, go away" + create `BotAccessRequest(Pending)`
 - **Denied sender** → silently drop message, no reply
 - **Approved sender** → route to chat engine; history stored with `Source=Telegram` and scoped by `ConversationId`

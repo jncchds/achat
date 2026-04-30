@@ -18,6 +18,7 @@ public class AppDbContext : DbContext
     public DbSet<BotPersonaSnapshot> BotPersonaSnapshots => Set<BotPersonaSnapshot>();
     public DbSet<BotAccessList> BotAccessLists => Set<BotAccessList>();
     public DbSet<BotAccessRequest> BotAccessRequests => Set<BotAccessRequest>();
+    public DbSet<TelegramOutboundMessage> TelegramOutboundMessages => Set<TelegramOutboundMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -192,6 +193,29 @@ public class AppDbContext : DbContext
              .WithMany()
              .HasForeignKey(r => r.ResolvedByUserId)
              .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // TelegramOutboundMessage
+        modelBuilder.Entity<TelegramOutboundMessage>(e =>
+        {
+            e.HasKey(m => m.Id);
+            e.Property(m => m.Id).HasDefaultValueSql("gen_random_uuid()");
+            e.Property(m => m.Text).HasColumnType("text");
+            e.Property(m => m.ParseMode).HasMaxLength(32);
+            e.Property(m => m.ReplyMarkupJson).HasColumnType("text");
+            e.Property(m => m.ChatAction).HasMaxLength(32);
+            e.Property(m => m.CallbackQueryId).HasMaxLength(256);
+            e.Property(m => m.LastError).HasColumnType("text");
+            e.Property(m => m.AttemptCount).HasDefaultValue(0);
+            e.Property(m => m.AvailableAt).HasDefaultValueSql("now()");
+            e.Property(m => m.CreatedAt).HasDefaultValueSql("now()");
+            e.Property(m => m.UpdatedAt).HasDefaultValueSql("now()");
+            e.HasIndex(m => new { m.AvailableAt, m.CreatedAt });
+            e.HasIndex(m => m.BotId);
+            e.HasOne(m => m.Bot)
+             .WithMany()
+             .HasForeignKey(m => m.BotId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

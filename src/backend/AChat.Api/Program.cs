@@ -9,7 +9,7 @@ using AChat.Infrastructure.Data;
 using AChat.Infrastructure.LLM;
 using AChat.Infrastructure.Security;
 using AChat.Infrastructure.Telegram;
-using AChat.Worker;
+using AChat.Api.Workers;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -81,14 +81,19 @@ builder.Services.AddSingleton<ILLMProviderFactory, LLMProviderFactory>();
 // Telegram webhook service
 builder.Services.AddHttpClient<ITelegramWebhookService, TelegramWebhookService>();
 
+// Telegram rate limiting and dispatch queue
+builder.Services.Configure<TelegramRateLimitingOptions>(builder.Configuration.GetSection("Telegram:RateLimiting"));
+builder.Services.AddSingleton<ITelegramRequestDispatcher, TelegramRequestDispatcher>();
+builder.Services.AddHostedService(sp => (TelegramRequestDispatcher)sp.GetRequiredService<ITelegramRequestDispatcher>());
+
 // Telegram message handler (scoped — uses DbContext)
 builder.Services.AddScoped<TelegramHandlerService>(sp =>
 {
     var db = sp.GetRequiredService<AppDbContext>();
     var factory = sp.GetRequiredService<ILLMProviderFactory>();
-    var enc = sp.GetRequiredService<IEncryptionService>();
     var opts = sp.GetRequiredService<IOptions<EvolutionOptions>>();
-    return new TelegramHandlerService(db, factory, enc, opts, opts.Value.RagTopK, opts.Value.RecentMessageWindowSize);
+    var dispatcher = sp.GetRequiredService<ITelegramRequestDispatcher>();
+    return new TelegramHandlerService(db, factory, dispatcher, opts, opts.Value.RagTopK, opts.Value.RecentMessageWindowSize);
 });
 
 // Background workers

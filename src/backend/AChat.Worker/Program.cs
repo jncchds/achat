@@ -5,9 +5,7 @@ using AChat.Core.Services;
 using AChat.Infrastructure.Data;
 using AChat.Infrastructure.LLM;
 using AChat.Infrastructure.Security;
-using AChat.Worker;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 using Pgvector.EntityFrameworkCore;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -28,10 +26,6 @@ builder.Services.AddSingleton<ILLMProviderFactory, LLMProviderFactory>();
 
 // Evolution options
 builder.Services.Configure<EvolutionOptions>(builder.Configuration.GetSection("Evolution"));
-
-// Background workers
-builder.Services.AddHostedService<SummarizationWorker>();
-builder.Services.AddHostedService<PersonaEvolutionWorker>();
 
 var host = builder.Build();
 host.Run();

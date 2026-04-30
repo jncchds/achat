@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Pgvector;
 
-namespace AChat.Worker;
+namespace AChat.Api.Workers;
 
 public class SummarizationWorker : BackgroundService
 {

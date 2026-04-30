@@ -28,6 +28,17 @@ services:
       Jwt__ExpiresInMinutes: ${JWT_EXPIRES_IN_MINUTES:-60}
       Encryption__Key: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
       Telegram__WebhookBaseUrl: ${TELEGRAM_WEBHOOK_BASE_URL:?TELEGRAM_WEBHOOK_BASE_URL is required}
+      Telegram__RateLimiting__Enabled: ${TELEGRAM_RATE_LIMIT_ENABLED:-true}
+      Telegram__RateLimiting__GlobalInboundPerSecond: ${TELEGRAM_RATE_LIMIT_GLOBAL_INBOUND_PER_SECOND:-60}
+      Telegram__RateLimiting__GlobalInboundBurst: ${TELEGRAM_RATE_LIMIT_GLOBAL_INBOUND_BURST:-120}
+      Telegram__RateLimiting__GlobalOutboundPerSecond: ${TELEGRAM_RATE_LIMIT_GLOBAL_OUTBOUND_PER_SECOND:-30}
+      Telegram__RateLimiting__GlobalOutboundBurst: ${TELEGRAM_RATE_LIMIT_GLOBAL_OUTBOUND_BURST:-60}
+      Telegram__RateLimiting__PerBotOutboundPerSecond: ${TELEGRAM_RATE_LIMIT_PER_BOT_OUTBOUND_PER_SECOND:-20}
+      Telegram__RateLimiting__PerBotOutboundBurst: ${TELEGRAM_RATE_LIMIT_PER_BOT_OUTBOUND_BURST:-30}
+      Telegram__RateLimiting__QueueCapacity: ${TELEGRAM_RATE_LIMIT_QUEUE_CAPACITY:-5000}
+      Telegram__RateLimiting__DispatcherIdleDelayMs: ${TELEGRAM_RATE_LIMIT_DISPATCHER_IDLE_DELAY_MS:-25}
+      Telegram__RateLimiting__MaxRetryAttempts: ${TELEGRAM_RATE_LIMIT_MAX_RETRY_ATTEMPTS:-5}
+      Telegram__RateLimiting__DefaultRetryAfterSeconds: ${TELEGRAM_RATE_LIMIT_DEFAULT_RETRY_AFTER_SECONDS:-2}
       Evolution__SummarizationThreshold: ${SUMMARIZATION_THRESHOLD:-50}
       Evolution__SummarizationBatchSize: ${SUMMARIZATION_BATCH_SIZE:-30}
       Evolution__PersonaEvolutionMessageInterval: ${PERSONA_EVOLUTION_MESSAGE_INTERVAL:-20}

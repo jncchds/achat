@@ -43,9 +43,9 @@ public class ChatContextBuilder
             systemPrompt += $"\n\n## Conversation Summary\n{summary.SummaryText}";
 
         // RAG: top-K relevant past messages by vector similarity
-        if (queryEmbedding is not null)
+        if (EmbeddingVectorCompatibility.IsCompatible(queryEmbedding))
         {
-            var queryVector = new Vector(queryEmbedding);
+            var queryVector = new Vector(queryEmbedding!);
             var ragMessages = await _db.Messages
                 .Where(m => m.BotId == bot.Id
                             && m.UserId == userId

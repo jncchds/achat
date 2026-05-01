@@ -164,8 +164,16 @@ public class TelegramHandlerService
             {
                 var embProvider = _providerFactory.GetEmbeddingProvider(bot.EmbeddingPreset);
                 queryEmbedding = await embProvider.GenerateEmbeddingAsync(message.Text, ct);
-                userMsg.Embedding = new Vector(queryEmbedding);
-                await _db.SaveChangesAsync(ct);
+                var userEmbeddingVector = EmbeddingVectorCompatibility.ToVectorOrNull(queryEmbedding);
+                if (userEmbeddingVector is not null)
+                {
+                    userMsg.Embedding = userEmbeddingVector;
+                    await _db.SaveChangesAsync(ct);
+                }
+                else
+                {
+                    queryEmbedding = null;
+                }
             }
             catch { /* non-fatal */ }
         }
@@ -210,8 +218,12 @@ public class TelegramHandlerService
             {
                 var embProvider = _providerFactory.GetEmbeddingProvider(bot.EmbeddingPreset);
                 var emb = await embProvider.GenerateEmbeddingAsync(responseText, ct);
-                assistantMsg.Embedding = new Vector(emb);
-                await _db.SaveChangesAsync(ct);
+                var assistantEmbeddingVector = EmbeddingVectorCompatibility.ToVectorOrNull(emb);
+                if (assistantEmbeddingVector is not null)
+                {
+                    assistantMsg.Embedding = assistantEmbeddingVector;
+                    await _db.SaveChangesAsync(ct);
+                }
             }
             catch { /* non-fatal */ }
         }

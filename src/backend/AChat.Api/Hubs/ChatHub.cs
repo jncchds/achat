@@ -119,8 +119,16 @@ public class ChatHub : Hub
             {
                 var embeddingProvider = _providerFactory.GetEmbeddingProvider(bot.EmbeddingPreset);
                 queryEmbedding = await embeddingProvider.GenerateEmbeddingAsync(content, ct);
-                userMessage.Embedding = new Vector(queryEmbedding);
-                await _db.SaveChangesAsync(ct);
+                var userEmbeddingVector = EmbeddingVectorCompatibility.ToVectorOrNull(queryEmbedding);
+                if (userEmbeddingVector is not null)
+                {
+                    userMessage.Embedding = userEmbeddingVector;
+                    await _db.SaveChangesAsync(ct);
+                }
+                else
+                {
+                    queryEmbedding = null;
+                }
             }
             catch
             {
@@ -193,8 +201,13 @@ public class ChatHub : Hub
                     var embeddingProvider = _providerFactory.GetEmbeddingProvider(bot.EmbeddingPreset);
                     var assistantEmbedding = await embeddingProvider
                         .GenerateEmbeddingAsync(assistantMessage.Content, ct);
-                    assistantMessage.Embedding = new Vector(assistantEmbedding);
-                    await _db.SaveChangesAsync(ct);
+
+                    var assistantEmbeddingVector = EmbeddingVectorCompatibility.ToVectorOrNull(assistantEmbedding);
+                    if (assistantEmbeddingVector is not null)
+                    {
+                        assistantMessage.Embedding = assistantEmbeddingVector;
+                        await _db.SaveChangesAsync(ct);
+                    }
                 }
                 catch
                 {

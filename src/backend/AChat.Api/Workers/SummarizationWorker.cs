@@ -2,6 +2,7 @@ using AChat.Infrastructure;
 using AChat.Core.Entities;
 using AChat.Core.LLM;
 using AChat.Infrastructure.Data;
+using AChat.Infrastructure.LLM;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -149,7 +150,7 @@ public class SummarizationWorker : BackgroundService
             {
                 var embProvider = factory.GetEmbeddingProvider(bot.EmbeddingPreset);
                 var emb = await embProvider.GenerateEmbeddingAsync(summaryText, ct);
-                summary.Embedding = new Vector(emb);
+                summary.Embedding = EmbeddingVectorCompatibility.ToVectorOrNull(emb);
             }
             catch { /* non-fatal */ }
         }

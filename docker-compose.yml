@@ -21,6 +21,10 @@ services:
       dockerfile: src/backend/AChat.Api/Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: Production
+      Logging__LogLevel__Default: ${LOG_LEVEL:-Information}
+      Logging__LogLevel__Microsoft__AspNetCore: ${MICROSOFT_ASPNETCORE_LOG_LEVEL:-Warning}
+      Logging__LogLevel__Microsoft__EntityFrameworkCore: ${EF_LOG_LEVEL:-Warning}
+      Logging__LogLevel__Microsoft__EntityFrameworkCore__Database__Command: ${EF_DB_COMMAND_LOG_LEVEL:-Warning}
       ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=achat;Username=${POSTGRES_USER:-achat};Password=${POSTGRES_PASSWORD}"
       Jwt__Secret: ${JWT_SECRET:?JWT_SECRET is required}
       Jwt__Issuer: ${JWT_ISSUER:-achat}

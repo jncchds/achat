@@ -258,6 +258,17 @@ Server -> client:
 | `JWT_EXPIRES_IN_MINUTES` | `60` |
 | `ADMIN_FORCE_UPDATE_FIRST_USER` | `false` |
 
+### Logging
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LOG_LEVEL` | `Information` | Main application log level (includes API action logs) |
+| `MICROSOFT_ASPNETCORE_LOG_LEVEL` | `Warning` | ASP.NET Core framework logs |
+| `EF_LOG_LEVEL` | `Warning` | EF Core category logs |
+| `EF_DB_COMMAND_LOG_LEVEL` | `Warning` | EF SQL command logs |
+
+`EF_LOG_LEVEL` and `EF_DB_COMMAND_LOG_LEVEL` default to `Warning` so EF messages do not flood info-level logs.
+
 ### Telegram-related
 
 | Variable | Purpose |

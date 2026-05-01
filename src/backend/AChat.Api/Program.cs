@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Diagnostics;
+using System.Security.Claims;
 using AChat.Api.Hubs;
 using AChat.Api.Services;
 using AChat.Core.Entities;
@@ -189,6 +191,43 @@ if (app.Environment.IsDevelopment())
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+app.Use(async (context, next) =>
+{
+    if (!context.Request.Path.StartsWithSegments("/api"))
+    {
+        await next();
+        return;
+    }
+
+    var startedAt = Stopwatch.StartNew();
+    try
+    {
+        await next();
+        var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "anonymous";
+        app.Logger.LogInformation(
+            "Action {Method} {Path} returned {StatusCode} for user {UserId} in {ElapsedMs}ms",
+            context.Request.Method,
+            context.Request.Path,
+            context.Response.StatusCode,
+            userId,
+            startedAt.ElapsedMilliseconds);
+    }
+    catch (Exception ex)
+    {
+        startedAt.Stop();
+        var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "anonymous";
+        app.Logger.LogError(
+            ex,
+            "Action {Method} {Path} failed for user {UserId} after {ElapsedMs}ms",
+            context.Request.Method,
+            context.Request.Path,
+            userId,
+            startedAt.ElapsedMilliseconds);
+        throw;
+    }
+});
+
 app.MapControllers();
 app.MapHub<ChatHub>("/hubs/chat");
 app.MapFallbackToFile("index.html");

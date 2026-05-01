@@ -129,12 +129,19 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
 
-    var adminEmail = app.Configuration["Admin:Email"];
+    var adminEmail = app.Configuration["Admin:Email"]?.Trim();
     var adminPassword = app.Configuration["Admin:Password"];
+    var forceUpdateFirstUser = app.Configuration.GetValue("Admin:ForceUpdateFirstUser", false);
 
     if (!string.IsNullOrWhiteSpace(adminEmail) && !string.IsNullOrWhiteSpace(adminPassword))
     {
-        if (!await db.Users.AnyAsync(u => !u.IsStubAccount))
+        var firstNonStubUser = await db.Users
+            .Where(u => !u.IsStubAccount)
+            .OrderBy(u => u.CreatedAt)
+            .ThenBy(u => u.Id)
+            .FirstOrDefaultAsync();
+
+        if (firstNonStubUser is null)
         {
             db.Users.Add(new User
             {
@@ -146,6 +153,23 @@ using (var scope = app.Services.CreateScope())
                 CreatedAt = DateTime.UtcNow
             });
             await db.SaveChangesAsync();
+            app.Logger.LogInformation("Seeded initial admin user from Admin configuration.");
+        }
+        else if (forceUpdateFirstUser)
+        {
+            var emailConflict = await db.Users.AnyAsync(u => u.Id != firstNonStubUser.Id && u.Email == adminEmail);
+            if (emailConflict)
+            {
+                throw new InvalidOperationException(
+                    "Admin:ForceUpdateFirstUser is enabled, but Admin:Email conflicts with an existing user email.");
+            }
+
+            firstNonStubUser.Email = adminEmail;
+            firstNonStubUser.PasswordHash = SeedHashPassword(adminPassword);
+            firstNonStubUser.IsAdmin = true;
+            firstNonStubUser.IsStubAccount = false;
+            await db.SaveChangesAsync();
+            app.Logger.LogWarning("Force-updated first non-stub user from Admin configuration.");
         }
     }
 }

@@ -112,6 +112,7 @@ dotnet ef database update --project AChat.Infrastructure/AChat.Infrastructure.cs
 - Keys must be 32 bytes, Base64-encoded, stored in `Encryption:Key` config (env var in production)
 - API keys/tokens are **never** returned to clients in plaintext after initial save
 - Passwords use PBKDF2-SHA256 with 350,000 iterations and a random 16-byte salt
+- Startup admin behavior: `Admin:Email` + `Admin:Password` seed the first non-stub user if none exists; optional `Admin:ForceUpdateFirstUser=true` force-updates the first non-stub user on startup
 
 ### Living Documents
 - **This file (`AGENTS.md`)**: update whenever architecture, models, API, or conventions change

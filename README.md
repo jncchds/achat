@@ -136,6 +136,7 @@ In that case, either:
   - `POST /api/admin/users`
   - `DELETE /api/admin/users/{id}`
 - On startup, API can seed an initial admin from `Admin:Email` and `Admin:Password` **if no non-stub users exist**.
+- Optional startup override: set `Admin:ForceUpdateFirstUser=true` to force-update the first non-stub user from `Admin:Email`/`Admin:Password` on startup.
 
 > Note: The frontend includes a `/register` page and client call to `POST /api/auth/register`, but that backend endpoint is not currently implemented.
 
@@ -240,41 +241,48 @@ Server -> client:
 
 | Variable | Purpose |
 |---|---|
-| `ConnectionStrings__DefaultConnection` | PostgreSQL connection string |
-| `Jwt__Secret` | JWT signing key (min 32 chars recommended) |
-| `Encryption__Key` | Base64-encoded 32-byte AES key |
+| `POSTGRES_USER` | PostgreSQL username |
+| `POSTGRES_PASSWORD` | PostgreSQL password |
+| `JWT_SECRET` | JWT signing key (min 32 chars recommended) |
+| `ENCRYPTION_KEY` | Base64-encoded 32-byte AES key |
+| `ADMIN_EMAIL` | Seed admin email |
+| `ADMIN_PASSWORD` | Seed admin password |
 
 ### Common optional
 
 | Variable | Default |
 |---|---|
-| `Jwt__Issuer` | `AChat` / `achat` (depends on environment config) |
-| `Jwt__Audience` | `AChat` / `achat` |
-| `Jwt__ExpiresInMinutes` | `1440` (appsettings), `60` in compose env defaults |
+| `JWT_ISSUER` | `achat` |
+| `JWT_AUDIENCE` | `achat` |
+| `JWT_EXPIRES_IN_MINUTES` | `60` |
+| `ADMIN_FORCE_UPDATE_FIRST_USER` | `false` |
 
 ### Telegram-related
 
 | Variable | Purpose |
 |---|---|
-| `Telegram__WebhookBaseUrl` | Public HTTPS base URL used when registering webhooks |
-| `Telegram__RateLimiting__*` | Inbound/outbound limiter + dispatcher queue tuning |
+| `TELEGRAM_WEBHOOK_BASE_URL` | Public HTTPS base URL used when registering webhooks |
+| `TELEGRAM_RATE_LIMIT_ENABLED` | `true` |
+| `TELEGRAM_RATE_LIMIT_GLOBAL_INBOUND_PER_SECOND` | `60` |
+| `TELEGRAM_RATE_LIMIT_GLOBAL_INBOUND_BURST` | `120` |
+| `TELEGRAM_RATE_LIMIT_GLOBAL_OUTBOUND_PER_SECOND` | `30` |
+| `TELEGRAM_RATE_LIMIT_GLOBAL_OUTBOUND_BURST` | `60` |
+| `TELEGRAM_RATE_LIMIT_PER_BOT_OUTBOUND_PER_SECOND` | `20` |
+| `TELEGRAM_RATE_LIMIT_PER_BOT_OUTBOUND_BURST` | `30` |
+| `TELEGRAM_RATE_LIMIT_QUEUE_CAPACITY` | `5000` |
+| `TELEGRAM_RATE_LIMIT_DISPATCHER_IDLE_DELAY_MS` | `25` |
+| `TELEGRAM_RATE_LIMIT_MAX_RETRY_ATTEMPTS` | `5` |
+| `TELEGRAM_RATE_LIMIT_DEFAULT_RETRY_AFTER_SECONDS` | `2` |
 
 ### Evolution engine
 
 | Variable | Default |
 |---|---|
-| `Evolution__SummarizationThreshold` | `50` |
-| `Evolution__SummarizationBatchSize` | `30` |
-| `Evolution__PersonaEvolutionMessageInterval` | `20` |
-| `Evolution__RecentMessageWindowSize` | `20` |
-| `Evolution__RagTopK` | `5` |
-
-### Admin bootstrap (important for first login)
-
-| Variable | Purpose |
-|---|---|
-| `Admin__Email` | Seed admin email |
-| `Admin__Password` | Seed admin password |
+| `SUMMARIZATION_THRESHOLD` | `50` |
+| `SUMMARIZATION_BATCH_SIZE` | `30` |
+| `PERSONA_EVOLUTION_MESSAGE_INTERVAL` | `20` |
+| `RECENT_MESSAGE_WINDOW_SIZE` | `20` |
+| `RAG_TOP_K` | `5` |
 
 ---
 

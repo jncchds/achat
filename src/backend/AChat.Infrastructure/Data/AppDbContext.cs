@@ -30,8 +30,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<User>(e =>
         {
             e.HasKey(u => u.Id);
-            e.HasIndex(u => u.Email).IsUnique().HasFilter("email IS NOT NULL");
-            e.HasIndex(u => u.TelegramId).IsUnique().HasFilter("telegram_id IS NOT NULL");
+            e.HasIndex(u => u.Email).IsUnique().HasFilter("\"Email\" IS NOT NULL");
+            e.HasIndex(u => u.TelegramId).IsUnique().HasFilter("\"TelegramId\" IS NOT NULL");
             e.Property(u => u.Id).HasDefaultValueSql("gen_random_uuid()");
             e.Property(u => u.CreatedAt).HasDefaultValueSql("now()");
         });

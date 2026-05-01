@@ -441,11 +441,11 @@ namespace AChat.Infrastructure.Migrations
 
                     b.HasIndex("Email")
                         .IsUnique()
-                        .HasFilter("email IS NOT NULL");
+                        .HasFilter("\"Email\" IS NOT NULL");
 
                     b.HasIndex("TelegramId")
                         .IsUnique()
-                        .HasFilter("telegram_id IS NOT NULL");
+                        .HasFilter("\"TelegramId\" IS NOT NULL");
 
                     b.ToTable("Users");
                 });

@@ -46,6 +46,7 @@ services:
       Evolution__RagTopK: ${RAG_TOP_K:-5}
       Admin__Email: ${ADMIN_EMAIL:?ADMIN_EMAIL is required}
       Admin__Password: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      Admin__ForceUpdateFirstUser: ${ADMIN_FORCE_UPDATE_FIRST_USER:-false}
     depends_on:
       db:
         condition: service_healthy

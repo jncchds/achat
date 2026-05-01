@@ -1,5 +1,3 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
 using AChat.Api.Models.Access;
 using AChat.Core.Entities;
 using AChat.Infrastructure.Data;
@@ -9,10 +7,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AChat.Api.Controllers;
 
-[ApiController]
 [Route("api/bots/{botId:guid}")]
 [Authorize]
-public class AccessController : ControllerBase
+public class AccessController : ApiControllerBase
 {
     private readonly AppDbContext _db;
 
@@ -167,10 +164,6 @@ public class AccessController : ControllerBase
         var userId = GetUserId();
         return await _db.Bots.AnyAsync(b => b.Id == botId && b.OwnerId == userId, ct);
     }
-
-    private Guid GetUserId() =>
-        Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
 
     private static AccessRequestResponse ToRequestResponse(BotAccessRequest r) => new(
         r.Id, r.BotId, r.SubjectType.ToString(), r.SubjectId,

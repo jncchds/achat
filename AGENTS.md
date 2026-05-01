@@ -88,7 +88,7 @@ Bot owner is always implicitly allowed on web. Owner is auto-added to `BotAccess
 | Auth | `POST /api/auth/register`, `POST /api/auth/login`, `PUT /api/auth/telegram` |
 | Presets | `GET/POST /api/presets`, `GET/PUT/DELETE /api/presets/{id}` |
 | Bots | `GET/POST /api/bots`, `GET/PUT/DELETE /api/bots/{id}`, `GET /api/bots/{id}/persona-history` |
-| Conversations | `GET/POST /api/bots/{botId}/conversations`, `GET /api/bots/{botId}/conversations/{conversationId}/messages` |
+| Conversations | `GET/POST /api/bots/{botId}/conversations`, `PUT/DELETE /api/bots/{botId}/conversations/{conversationId}`, `GET /api/bots/{botId}/conversations/{conversationId}/messages` |
 | Access | `GET /api/bots/{id}/access-requests`, `POST .../approve`, `POST .../deny`, `GET/DELETE /api/bots/{id}/access-list` |
 | Chat | SignalR hub `/hubs/chat` — `SendMessage(botId, content, conversationId?)` → streaming `ReceiveToken(chunk)` |
 | Telegram | `POST /api/telegram/webhook/{botId}` — per-bot, validated via secret token header |

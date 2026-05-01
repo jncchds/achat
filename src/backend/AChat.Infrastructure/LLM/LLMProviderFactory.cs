@@ -7,10 +7,12 @@ namespace AChat.Infrastructure.LLM;
 public class LLMProviderFactory : ILLMProviderFactory
 {
     private readonly IEncryptionService _encryption;
+    private readonly IHttpClientFactory _httpClientFactory;
 
-    public LLMProviderFactory(IEncryptionService encryption)
+    public LLMProviderFactory(IEncryptionService encryption, IHttpClientFactory httpClientFactory)
     {
         _encryption = encryption;
+        _httpClientFactory = httpClientFactory;
     }
 
     public ILLMChatProvider GetChatProvider(LLMProviderPreset preset)
@@ -18,17 +20,20 @@ public class LLMProviderFactory : ILLMProviderFactory
         return preset.Provider switch
         {
             LLMProvider.Ollama => new OllamaProvider(
+                _httpClientFactory,
                 preset.BaseUrl ?? "http://localhost:11434",
                 preset.ModelName,
                 preset.EmbeddingModel),
 
             LLMProvider.OpenAI => new OpenAIProvider(
+                _httpClientFactory,
                 DecryptKey(preset),
                 preset.ModelName,
                 preset.EmbeddingModel,
                 preset.BaseUrl ?? "https://api.openai.com/v1/"),
 
             LLMProvider.GoogleAIStudio => new GoogleAIStudioProvider(
+                _httpClientFactory,
                 DecryptKey(preset),
                 preset.ModelName,
                 preset.EmbeddingModel),
@@ -42,17 +47,20 @@ public class LLMProviderFactory : ILLMProviderFactory
         return preset.Provider switch
         {
             LLMProvider.Ollama => new OllamaProvider(
+                _httpClientFactory,
                 preset.BaseUrl ?? "http://localhost:11434",
                 preset.ModelName,
                 preset.EmbeddingModel),
 
             LLMProvider.OpenAI => new OpenAIProvider(
+                _httpClientFactory,
                 DecryptKey(preset),
                 preset.ModelName,
                 preset.EmbeddingModel,
                 preset.BaseUrl ?? "https://api.openai.com/v1/"),
 
             LLMProvider.GoogleAIStudio => new GoogleAIStudioProvider(
+                _httpClientFactory,
                 DecryptKey(preset),
                 preset.ModelName,
                 preset.EmbeddingModel),

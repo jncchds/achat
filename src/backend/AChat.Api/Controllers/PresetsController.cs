@@ -1,5 +1,3 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
 using AChat.Api.Models.Presets;
 using AChat.Core.Entities;
 using AChat.Core.Services;
@@ -10,10 +8,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AChat.Api.Controllers;
 
-[ApiController]
 [Route("api/presets")]
 [Authorize]
-public class PresetsController : ControllerBase
+public class PresetsController : ApiControllerBase
 {
     private readonly AppDbContext _db;
     private readonly IEncryptionService _encryption;
@@ -105,7 +102,4 @@ public class PresetsController : ControllerBase
         HasApiKey: p.EncryptedApiKey is not null,
         p.CreatedAt, p.UpdatedAt);
 
-    private Guid GetUserId() =>
-        Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
 }

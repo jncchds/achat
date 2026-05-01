@@ -145,11 +145,29 @@ export function ChatPage() {
       }
     });
 
-    conn.onreconnected(() => setConnected(true));
+    conn.onreconnecting(() => {
+      setConnected(false);
+    });
+
+    conn.onreconnected(async () => {
+      setConnected(true);
+      await queryClient.invalidateQueries({ queryKey: ['conversations', botId] });
+      const convId = activeConversationIdRef.current;
+      if (convId) {
+        await queryClient.invalidateQueries({ queryKey: ['conversation-messages', botId, convId] });
+      }
+    });
     conn.start().then(() => setConnected(true)).catch(console.error);
 
     connRef.current = conn;
-    return () => { conn.stop(); };
+    return () => {
+      conn.off('ReceiveToken');
+      conn.off('ReceiveMessageComplete');
+      conn.off('ConversationResolved');
+      conn.off('BotInitiatedMessageStart');
+      conn.off('Error');
+      conn.stop();
+    };
   }, [token, queryClient, botId]); // activeConversationId intentionally excluded
 
   useEffect(() => {

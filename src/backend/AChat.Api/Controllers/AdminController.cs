@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using AChat.Api.Models.Admin;
@@ -10,10 +9,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AChat.Api.Controllers;
 
-[ApiController]
 [Route("api/admin")]
 [Authorize(Policy = "AdminOnly")]
-public class AdminController : ControllerBase
+public class AdminController : ApiControllerBase
 {
     private readonly AppDbContext _db;
 
@@ -59,9 +57,7 @@ public class AdminController : ControllerBase
     [HttpDelete("users/{id:guid}")]
     public async Task<IActionResult> DeleteUser(Guid id, CancellationToken ct)
     {
-        var currentUserId = Guid.Parse(
-            User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? User.FindFirstValue("sub")!);
+        var currentUserId = GetUserId();
 
         if (id == currentUserId)
             return BadRequest("Cannot delete your own account.");

@@ -8,16 +8,27 @@ namespace AChat.Infrastructure.LLM;
 
 public class OpenAIProvider : ILLMChatProvider, ILLMEmbeddingProvider
 {
-    private readonly HttpClient _http;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly string _apiKey;
+    private readonly string _baseUrl;
     private readonly string _model;
     private readonly string? _embeddingModel;
 
-    public OpenAIProvider(string apiKey, string model, string? embeddingModel, string baseUrl = "https://api.openai.com/v1/")
+    public OpenAIProvider(IHttpClientFactory httpClientFactory, string apiKey, string model, string? embeddingModel, string baseUrl = "https://api.openai.com/v1/")
     {
-        _http = new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/") };
-        _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        _httpClientFactory = httpClientFactory;
+        _apiKey = apiKey;
+        _baseUrl = baseUrl.TrimEnd('/') + "/";
         _model = model;
         _embeddingModel = embeddingModel ?? "text-embedding-3-small";
+    }
+
+    private HttpClient CreateHttpClient()
+    {
+        var http = _httpClientFactory.CreateClient();
+        http.BaseAddress = new Uri(_baseUrl);
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        return http;
     }
 
     public async Task<string> GenerateChatAsync(LLMChatRequest request, CancellationToken ct = default)
@@ -52,7 +63,7 @@ public class OpenAIProvider : ILLMChatProvider, ILLMEmbeddingProvider
             Content = new StringContent(body, Encoding.UTF8, "application/json")
         };
 
-        using var response = await _http.SendAsync(
+        using var response = await CreateHttpClient().SendAsync(
             httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
 
@@ -85,7 +96,7 @@ public class OpenAIProvider : ILLMChatProvider, ILLMEmbeddingProvider
     public async Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken ct = default)
     {
         var body = JsonSerializer.Serialize(new { model = _embeddingModel, input = text });
-        var response = await _http.PostAsync("embeddings",
+        var response = await CreateHttpClient().PostAsync("embeddings",
             new StringContent(body, Encoding.UTF8, "application/json"), ct);
         response.EnsureSuccessStatusCode();
 

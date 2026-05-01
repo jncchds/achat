@@ -11,18 +11,25 @@ namespace AChat.Infrastructure.LLM;
 /// </summary>
 public class GoogleAIStudioProvider : ILLMChatProvider, ILLMEmbeddingProvider
 {
-    private readonly HttpClient _http;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly string _apiKey;
     private readonly string _model;
     private readonly string? _embeddingModel;
     private const string BaseUrl = "https://generativelanguage.googleapis.com/v1beta/";
 
-    public GoogleAIStudioProvider(string apiKey, string model, string? embeddingModel)
+    public GoogleAIStudioProvider(IHttpClientFactory httpClientFactory, string apiKey, string model, string? embeddingModel)
     {
+        _httpClientFactory = httpClientFactory;
         _apiKey = apiKey;
         _model = model;
         _embeddingModel = embeddingModel ?? "text-embedding-004";
-        _http = new HttpClient { BaseAddress = new Uri(BaseUrl) };
+    }
+
+    private HttpClient CreateHttpClient()
+    {
+        var http = _httpClientFactory.CreateClient();
+        http.BaseAddress = new Uri(BaseUrl);
+        return http;
     }
 
     public async Task<string> GenerateChatAsync(LLMChatRequest request, CancellationToken ct = default)
@@ -55,7 +62,7 @@ public class GoogleAIStudioProvider : ILLMChatProvider, ILLMEmbeddingProvider
             Content = new StringContent(body, Encoding.UTF8, "application/json")
         };
 
-        using var response = await _http.SendAsync(
+        using var response = await CreateHttpClient().SendAsync(
             httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
 
@@ -92,7 +99,7 @@ public class GoogleAIStudioProvider : ILLMChatProvider, ILLMEmbeddingProvider
         });
 
         var url = $"models/{_embeddingModel}:embedContent?key={_apiKey}";
-        var response = await _http.PostAsync(url,
+        var response = await CreateHttpClient().PostAsync(url,
             new StringContent(body, Encoding.UTF8, "application/json"), ct);
         response.EnsureSuccessStatusCode();
 

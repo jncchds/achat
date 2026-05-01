@@ -8,15 +8,24 @@ namespace AChat.Infrastructure.LLM;
 
 public class OllamaProvider : ILLMChatProvider, ILLMEmbeddingProvider
 {
-    private readonly HttpClient _http;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly string _baseUrl;
     private readonly string _model;
     private readonly string? _embeddingModel;
 
-    public OllamaProvider(string baseUrl, string model, string? embeddingModel)
+    public OllamaProvider(IHttpClientFactory httpClientFactory, string baseUrl, string model, string? embeddingModel)
     {
-        _http = new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/") };
+        _httpClientFactory = httpClientFactory;
+        _baseUrl = baseUrl.TrimEnd('/') + "/";
         _model = model;
         _embeddingModel = embeddingModel ?? model;
+    }
+
+    private HttpClient CreateHttpClient()
+    {
+        var http = _httpClientFactory.CreateClient();
+        http.BaseAddress = new Uri(_baseUrl);
+        return http;
     }
 
     public async Task<string> GenerateChatAsync(LLMChatRequest request, CancellationToken ct = default)
@@ -54,7 +63,7 @@ public class OllamaProvider : ILLMChatProvider, ILLMEmbeddingProvider
             Content = new StringContent(body, Encoding.UTF8, "application/json")
         };
 
-        using var response = await _http.SendAsync(
+        using var response = await CreateHttpClient().SendAsync(
             httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
 
@@ -83,7 +92,7 @@ public class OllamaProvider : ILLMChatProvider, ILLMEmbeddingProvider
     public async Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken ct = default)
     {
         var body = JsonSerializer.Serialize(new { model = _embeddingModel, input = text });
-        var response = await _http.PostAsync("api/embed",
+        var response = await CreateHttpClient().PostAsync("api/embed",
             new StringContent(body, Encoding.UTF8, "application/json"), ct);
         response.EnsureSuccessStatusCode();
 

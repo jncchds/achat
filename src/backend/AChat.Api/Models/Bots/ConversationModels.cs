@@ -16,3 +16,5 @@ public record ConversationMessageResponse(
     DateTime CreatedAt);
 
 public record CreateConversationRequest(string? InitialTitle);
+
+public record RenameConversationRequest(string Title);

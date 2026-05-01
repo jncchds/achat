@@ -1,5 +1,3 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
 using AChat.Api.Models.Bots;
 using AChat.Core.Entities;
 using AChat.Infrastructure.Data;
@@ -9,10 +7,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AChat.Api.Controllers;
 
-[ApiController]
 [Route("api/bots/{botId:guid}/conversations")]
 [Authorize]
-public class ConversationsController : ControllerBase
+public class ConversationsController : ApiControllerBase
 {
     private readonly AppDbContext _db;
 
@@ -133,6 +130,57 @@ public class ConversationsController : ControllerBase
         return Ok(messages);
     }
 
+    [HttpPut("{conversationId:guid}")]
+    public async Task<ActionResult<ConversationResponse>> Rename(
+        Guid botId,
+        Guid conversationId,
+        RenameConversationRequest req,
+        CancellationToken ct)
+    {
+        var userId = GetUserId();
+        if (!await CanAccessBotAsync(botId, userId, ct)) return NotFound();
+
+        var conversation = await _db.BotConversations
+            .FirstOrDefaultAsync(c => c.Id == conversationId && c.BotId == botId && c.UserId == userId, ct);
+        if (conversation is null) return NotFound();
+
+        if (string.IsNullOrWhiteSpace(req.Title))
+            return BadRequest("Title cannot be empty.");
+
+        conversation.Title = req.Title.Trim();
+        conversation.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        var messageCount = await _db.Messages
+            .CountAsync(m => m.ConversationId == conversationId, ct);
+
+        return Ok(new ConversationResponse(
+            conversation.Id,
+            conversation.Title,
+            conversation.CreatedAt,
+            conversation.UpdatedAt,
+            conversation.LastMessageAt,
+            messageCount));
+    }
+
+    [HttpDelete("{conversationId:guid}")]
+    public async Task<IActionResult> Delete(
+        Guid botId,
+        Guid conversationId,
+        CancellationToken ct)
+    {
+        var userId = GetUserId();
+        if (!await CanAccessBotAsync(botId, userId, ct)) return NotFound();
+
+        var conversation = await _db.BotConversations
+            .FirstOrDefaultAsync(c => c.Id == conversationId && c.BotId == botId && c.UserId == userId, ct);
+        if (conversation is null) return NotFound();
+
+        _db.BotConversations.Remove(conversation);
+        await _db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
     private async Task<bool> CanAccessBotAsync(Guid botId, Guid userId, CancellationToken ct)
     {
         var bot = await _db.Bots
@@ -181,7 +229,4 @@ public class ConversationsController : ControllerBase
         await _db.SaveChangesAsync(ct);
     }
 
-    private Guid GetUserId() =>
-        Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
 }

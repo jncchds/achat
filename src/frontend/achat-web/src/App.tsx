@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
@@ -13,8 +13,19 @@ import { AccessRequestsPage } from './pages/AccessRequestsPage';
 import { AccessListPage } from './pages/AccessListPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { AdminUsersPage } from './pages/AdminUsersPage';
+import { RegisterPage } from './pages/RegisterPage';
 
 const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (error) => {
+      console.error('Query error:', error);
+    },
+  }),
+  mutationCache: new MutationCache({
+    onError: (error) => {
+      console.error('Mutation error:', error);
+    },
+  }),
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
 });
 
@@ -30,6 +41,7 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
             <Route element={<ProtectedRoute />}>
               <Route element={<Layout />}>
                 <Route path="/bots" element={<BotsPage />} />

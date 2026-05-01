@@ -1,14 +1,31 @@
 # AChat
 
-A multi-user platform for self-evolving chatbots accessible via web and Telegram.
+AChat is a multi-user platform for self-evolving chatbots with:
 
-## License
-
-MIT
+- a React web app
+- a .NET API + SignalR real-time chat backend
+- PostgreSQL + pgvector memory storage
+- optional per-bot Telegram integration
 
 ---
 
-## Tech Stack
+## What it does today
+
+- **Multi-user bot ownership** with JWT auth and per-user presets
+- **LLM abstraction** across Ollama, OpenAI, and Google AI Studio
+- **RAG-style memory** via vector embeddings (`pgvector`) for chat context
+- **Conversation management** (list/create/rename/delete + history)
+- **Background evolution engine**:
+  - conversation summarization worker
+  - persona evolution worker
+  - optional bot-initiated message after evolution
+- **Telegram support per bot** with webhook validation, inbound admission limiting, and durable outbound dispatch queue with retry/backoff on Telegram `429`
+- **Access control workflows** for non-owner users (approve/deny access requests)
+- **Admin user management** endpoints/UI (`/api/admin/users`, `/admin/users`)
+
+---
+
+## Tech stack
 
 | Layer | Technology |
 |---|---|
@@ -16,8 +33,29 @@ MIT
 | Database | PostgreSQL 16 + pgvector |
 | Frontend | React 19 + TypeScript + Vite |
 | LLM Providers | Ollama, OpenAI, Google AI Studio |
-| Telegram | Telegram.Bot (per-bot webhook) |
+| Telegram | Telegram.Bot |
 | Deployment | Docker Compose |
+
+---
+
+## Repository layout
+
+```
+achat/
+├── src/
+│   ├── backend/
+│   │   ├── AChat.Core/           # Domain entities + interfaces
+│   │   ├── AChat.Infrastructure/ # EF Core, provider impls, Telegram, encryption
+│   │   ├── AChat.Api/            # Controllers, SignalR hub, hosted workers
+│   │   └── AChat.Worker/         # Legacy compatibility host
+│   └── frontend/
+│       └── achat-web/            # React app
+├── docker-compose.yml
+├── docker-compose.override.yml
+├── .env.example
+├── AGENTS.md
+└── README.md
+```
 
 ---
 
@@ -26,156 +64,267 @@ MIT
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - [Node.js 20+](https://nodejs.org/)
 - [Docker + Docker Compose](https://docs.docker.com/compose/)
-- `dotnet-ef` CLI tool: `dotnet tool install --global dotnet-ef`
+- `dotnet-ef` CLI: `dotnet tool install --global dotnet-ef`
 
 ---
 
-## Quick Start (Local Dev)
+## Quick start (recommended): Docker Compose
 
-### 1. Clone and configure
+1. Create `.env` from `.env.example`.
+2. Ensure these **Compose-required** values are set:
+   - `POSTGRES_PASSWORD`
+   - `JWT_SECRET`
+   - `ENCRYPTION_KEY` (Base64 32-byte AES key)
+   - `TELEGRAM_WEBHOOK_BASE_URL`
+   - `ADMIN_EMAIL`
+   - `ADMIN_PASSWORD`
+3. Run:
 
 ```bash
-git clone <repo-url>
-cd achat
-cp .env.example .env
+docker compose up --build
 ```
 
-Edit `.env` — at minimum set `JWT_SECRET` and `ENCRYPTION_KEY`.
+### Services and ports
 
-To generate a valid 32-byte AES key:
+- `db`: PostgreSQL on `localhost:5432`
+- `api`: ASP.NET Core on `localhost:8080`
+
+The API container also serves the built frontend static files from `wwwroot`, so the app is available from the API host.
+
+---
+
+## Local development (split mode)
+
+Run DB/API and frontend separately for fast iteration.
+
+### 1) Start DB + API (Docker)
+
+```bash
+docker compose up db api --build
+```
+
+API will be on `http://localhost:8080`.
+
+### 2) Run frontend dev server
+
+```bash
+cd src/frontend/achat-web
+npm install
+npm run dev
+```
+
+Frontend: `http://localhost:5173`
+
+Vite proxies `/api` and `/hubs` to `http://localhost:8080` by default.
+
+### Optional: run API directly with `dotnet run`
+
+If running `AChat.Api` outside Docker, default local URL from `launchSettings.json` is `http://localhost:5145`.
+In that case, either:
+
+- set `VITE_API_URL=http://localhost:5145` for frontend dev, or
+- run the API on `8080` to match Vite proxy defaults.
+
+---
+
+## Authentication and user lifecycle
+
+- Login endpoint is implemented: `POST /api/auth/login`
+- Telegram linking endpoint is implemented: `PUT /api/auth/telegram`
+- Admin-only user management is implemented:
+  - `GET /api/admin/users`
+  - `POST /api/admin/users`
+  - `DELETE /api/admin/users/{id}`
+- On startup, API can seed an initial admin from `Admin:Email` and `Admin:Password` **if no non-stub users exist**.
+
+> Note: The frontend includes a `/register` page and client call to `POST /api/auth/register`, but that backend endpoint is not currently implemented.
+
+---
+
+## API surface (current)
+
+All endpoints require JWT auth unless noted otherwise.
+
+### Auth
+
+- `POST /api/auth/login`
+- `PUT /api/auth/telegram`
+
+### Admin (policy: `AdminOnly`)
+
+- `GET /api/admin/users`
+- `POST /api/admin/users`
+- `DELETE /api/admin/users/{id}`
+
+### Presets
+
+- `GET /api/presets`
+- `GET /api/presets/{id}`
+- `POST /api/presets`
+- `PUT /api/presets/{id}`
+- `DELETE /api/presets/{id}`
+
+### Bots
+
+- `GET /api/bots`
+- `GET /api/bots/{id}`
+- `POST /api/bots`
+- `PUT /api/bots/{id}`
+- `DELETE /api/bots/{id}`
+- `POST /api/bots/randomize-persona`
+- `POST /api/bots/{id}/persona-push`
+- `DELETE /api/bots/{id}/persona-push`
+- `GET /api/bots/{id}/persona-history`
+
+### Conversations
+
+- `GET /api/bots/{botId}/conversations`
+- `POST /api/bots/{botId}/conversations`
+- `PUT /api/bots/{botId}/conversations/{conversationId}`
+- `DELETE /api/bots/{botId}/conversations/{conversationId}`
+- `GET /api/bots/{botId}/conversations/{conversationId}/messages`
+
+### Access control
+
+- `GET /api/bots/{botId}/access-requests`
+- `POST /api/bots/{botId}/access-requests/{requestId}/approve`
+- `POST /api/bots/{botId}/access-requests/{requestId}/deny`
+- `GET /api/bots/{botId}/access-list`
+- `DELETE /api/bots/{botId}/access-list/{entryId}`
+
+### Telegram (unauthenticated webhook endpoint)
+
+- `POST /api/telegram/webhook/{botId}`
+
+---
+
+## SignalR contract
+
+Hub: `/hubs/chat`
+
+Client -> server:
+
+- `SendMessage(botId, content, conversationId?)`
+
+Server -> client:
+
+- `ConversationResolved`
+- `ReceiveToken`
+- `ReceiveMessageComplete`
+- `Error`
+- `BotInitiatedMessageStart`
+
+---
+
+## Telegram behavior (implemented)
+
+- Per-bot token and webhook registration via Telegram API when token is saved
+- Webhook request validation via `X-Telegram-Bot-Api-Secret-Token`
+- Inbound global rate limiting (admission)
+- Outbound durable queue in DB with:
+  - global + per-bot throttling
+  - retry/backoff for `429`
+- Unknown sender flow:
+  - bot replies: `I don't know you, go away`
+  - pending access request is created
+  - owner receives inline `Approve / Deny` callback keyboard message
+- Commands:
+  - `/new` (`/newconversation`, `/new_conversation`)
+  - `/conversations` (`/continue`)
+
+---
+
+## Configuration / environment variables
+
+### Core required
+
+| Variable | Purpose |
+|---|---|
+| `ConnectionStrings__DefaultConnection` | PostgreSQL connection string |
+| `Jwt__Secret` | JWT signing key (min 32 chars recommended) |
+| `Encryption__Key` | Base64-encoded 32-byte AES key |
+
+### Common optional
+
+| Variable | Default |
+|---|---|
+| `Jwt__Issuer` | `AChat` / `achat` (depends on environment config) |
+| `Jwt__Audience` | `AChat` / `achat` |
+| `Jwt__ExpiresInMinutes` | `1440` (appsettings), `60` in compose env defaults |
+
+### Telegram-related
+
+| Variable | Purpose |
+|---|---|
+| `Telegram__WebhookBaseUrl` | Public HTTPS base URL used when registering webhooks |
+| `Telegram__RateLimiting__*` | Inbound/outbound limiter + dispatcher queue tuning |
+
+### Evolution engine
+
+| Variable | Default |
+|---|---|
+| `Evolution__SummarizationThreshold` | `50` |
+| `Evolution__SummarizationBatchSize` | `30` |
+| `Evolution__PersonaEvolutionMessageInterval` | `20` |
+| `Evolution__RecentMessageWindowSize` | `20` |
+| `Evolution__RagTopK` | `5` |
+
+### Admin bootstrap (important for first login)
+
+| Variable | Purpose |
+|---|---|
+| `Admin__Email` | Seed admin email |
+| `Admin__Password` | Seed admin password |
+
+---
+
+## Database migrations
+
+Do not hand-write migration files.
+
+Create migration:
+
 ```powershell
-[Convert]::ToBase64String((1..32 | ForEach-Object { [byte](Get-Random -Max 256) }))
+cd src/backend
+dotnet ef migrations add <MigrationName> --project AChat.Infrastructure/AChat.Infrastructure.csproj --startup-project AChat.Api/AChat.Api.csproj
 ```
 
-### 2. Start PostgreSQL
-
-```bash
-docker compose up postgres -d
-```
-
-### 3. Apply database migrations
+Apply migration:
 
 ```powershell
 cd src/backend
 dotnet ef database update --project AChat.Infrastructure/AChat.Infrastructure.csproj --startup-project AChat.Api/AChat.Api.csproj
 ```
 
-### 4. Run the API
-
-```powershell
-cd src/backend/AChat.Api
-dotnet run
-```
-
-API available at `http://localhost:5000`. Swagger UI at `http://localhost:5000/swagger`.
-
-### 5. Run the frontend
-
-```powershell
-cd src/frontend/achat-web
-npm install
-npm run dev
-```
-
-Frontend available at `http://localhost:5173`.
+The API also applies migrations automatically on startup.
 
 ---
 
-## Environment Variables
+## Security notes
 
-All variables can be set in `.env` (Docker Compose) or `appsettings.json` / environment variables for the API.
-
-| Variable | Description | Required |
-|---|---|---|
-| `ConnectionStrings__DefaultConnection` | PostgreSQL connection string | Yes |
-| `Jwt__Secret` | JWT signing secret, minimum 32 characters | Yes |
-| `Jwt__Issuer` | JWT issuer (default: `AChat`) | No |
-| `Jwt__Audience` | JWT audience (default: `AChat`) | No |
-| `Jwt__ExpiresInMinutes` | Token lifetime in minutes (default: `1440`) | No |
-| `Encryption__Key` | AES-256 key as Base64-encoded 32 bytes | Yes |
-| `Telegram__WebhookBaseUrl` | Public base URL Telegram should call for webhooks | Yes (for Telegram bots) |
-| `Telegram__RateLimiting__Enabled` | Enable/disable Telegram global limiter + dispatcher queue | No |
-| `Telegram__RateLimiting__GlobalInboundPerSecond` | Global inbound webhook admission rate | No |
-| `Telegram__RateLimiting__GlobalInboundBurst` | Inbound burst bucket capacity | No |
-| `Telegram__RateLimiting__GlobalOutboundPerSecond` | Global outbound Telegram API call rate | No |
-| `Telegram__RateLimiting__GlobalOutboundBurst` | Outbound global burst capacity | No |
-| `Telegram__RateLimiting__PerBotOutboundPerSecond` | Outbound rate cap per bot | No |
-| `Telegram__RateLimiting__PerBotOutboundBurst` | Outbound burst cap per bot | No |
-| `Telegram__RateLimiting__QueueCapacity` | Soft capacity threshold for durable Telegram outbound queue | No |
-| `Telegram__RateLimiting__MaxRetryAttempts` | Max retries for Telegram `429` requeue handling | No |
-| `Telegram__RateLimiting__DefaultRetryAfterSeconds` | Fallback retry delay when Telegram omits retry-after | No |
-| `Evolution__SummarizationThreshold` | Messages before summarization triggers (default: `50`) | No |
-| `Evolution__PersonaEvolutionMessageInterval` | Messages between persona updates (default: `20`) | No |
+- LLM API keys and Telegram bot tokens are encrypted at rest via AES (`IEncryptionService`)
+- Password hashing uses PBKDF2-SHA256 with 350,000 iterations and random salt
+- API keys/tokens are not returned to clients in plaintext after save
 
 ---
 
-## Project Structure
+## Frontend routes
 
-```
-achat/
-├── src/
-│   ├── backend/
-│   │   ├── AChat.Core/          # Domain models, interfaces (no infrastructure deps)
-│   │   ├── AChat.Infrastructure/# EF Core, LLM providers, Telegram, encryption
-│   │   ├── AChat.Api/           # Web API + SignalR hubs + controllers + hosted background workers
-│   │   └── AChat.Worker/        # Legacy/compat host (workers now embedded in API)
-│   └── frontend/
-│       └── achat-web/           # React 19 + TypeScript + Vite
-├── docker-compose.yml
-├── .env.example
-├── AGENTS.md                    # Architecture reference for AI agents
-└── README.md
-```
+- `/login`
+- `/register` (UI present; backend register endpoint not implemented)
+- `/bots`
+- `/bots/new`
+- `/bots/:id/settings`
+- `/bots/:id/chat`
+- `/bots/:id/persona`
+- `/bots/:id/access-requests`
+- `/bots/:id/access-list`
+- `/presets`
+- `/profile`
+- `/admin/users`
 
 ---
 
-## Adding EF Migrations
+## License
 
-**Always use the CLI — never hand-write migration files.**
-
-```powershell
-cd src/backend
-dotnet ef migrations add <MigrationName> `
-  --project AChat.Infrastructure/AChat.Infrastructure.csproj `
-  --startup-project AChat.Api/AChat.Api.csproj
-```
-
----
-
-## Docker Compose (Full Stack)
-
-```bash
-docker compose up --build
-```
-
-Services:
-- `db` — PostgreSQL 16 + pgvector on port `5432`
-- `api` — AChat API (includes summarization and persona evolution hosted workers)
-
----
-
-## Features
-
-- **Multi-user**: each user has their own bots and LLM provider presets
-- **Self-evolving bots**: RAG memory retrieval + conversation summarization + dynamic persona rewriting
-- **LLM providers**: Ollama (local), OpenAI, Google AI Studio — configurable per bot
-- **Telegram integration**: each bot can have its own Telegram token with a per-bot access whitelist
-- **Telegram protection**: global/per-bot Telegram request limiting with durable DB-backed outbound queue and retry/backoff for Telegram `429`
-- **Conversation threads**: chat is split into per-user conversations with titles updated from the latest discussed topic
-- **Continuation flow**: web UI shows all conversations and supports starting a new one; Telegram supports `/conversations` (or `/continue`) selection and `/new`
-- **Access control**: bot owner approves/denies web and Telegram users; unknown senders get rejected and queued for approval
-- **Full history**: all messages (web + Telegram) stored server-side, scoped by bot+user+conversation
-
----
-
-## Conversation APIs
-
-| Endpoint | Description |
-|---|---|
-| `GET /api/bots/{botId}/conversations` | List current user's conversations for a bot |
-| `POST /api/bots/{botId}/conversations` | Start a new conversation |
-| `GET /api/bots/{botId}/conversations/{conversationId}/messages` | Load message history for a conversation |
-
-SignalR chat now accepts an optional conversation id:
-
-- `SendMessage(botId, content, conversationId?)`
+MIT

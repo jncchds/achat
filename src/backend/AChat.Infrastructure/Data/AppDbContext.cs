@@ -139,7 +139,7 @@ public class AppDbContext : DbContext
             e.Property(s => s.Id).HasDefaultValueSql("gen_random_uuid()");
             e.Property(s => s.CreatedAt).HasDefaultValueSql("now()");
             e.Property(s => s.Embedding).HasColumnType("vector(1536)");
-                        e.HasIndex(s => new { s.BotId, s.UserId, s.ConversationId, s.CreatedAt });
+            e.HasIndex(s => new { s.BotId, s.UserId, s.ConversationId, s.CreatedAt });
             e.HasOne(s => s.Bot)
              .WithMany(b => b.MemorySummaries)
              .HasForeignKey(s => s.BotId)
@@ -189,6 +189,7 @@ public class AppDbContext : DbContext
              .WithMany(b => b.AccessRequests)
              .HasForeignKey(r => r.BotId)
              .OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(r => new { r.BotId, r.SubjectType, r.SubjectId, r.Status });
             e.HasOne(r => r.ResolvedByUser)
              .WithMany()
              .HasForeignKey(r => r.ResolvedByUserId)

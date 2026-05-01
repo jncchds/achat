@@ -12,9 +12,8 @@ using Microsoft.IdentityModel.Tokens;
 
 namespace AChat.Api.Controllers;
 
-[ApiController]
 [Route("api/auth")]
-public class AuthController : ControllerBase
+public class AuthController : ApiControllerBase
 {
     private readonly AppDbContext _db;
     private readonly IConfiguration _config;
@@ -102,7 +101,4 @@ public class AuthController : ControllerBase
         return CryptographicOperations.FixedTimeEquals(hash, expectedHash);
     }
 
-    private Guid GetUserId() =>
-        Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
 }

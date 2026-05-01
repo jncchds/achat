@@ -1,5 +1,3 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
 using AChat.Api.Models.Bots;
 using AChat.Core.Entities;
 using AChat.Core.LLM;
@@ -14,10 +12,9 @@ using Microsoft.Extensions.Options;
 
 namespace AChat.Api.Controllers;
 
-[ApiController]
 [Route("api/bots")]
 [Authorize]
-public class BotsController : ControllerBase
+public class BotsController : ApiControllerBase
 {
     private readonly AppDbContext _db;
     private readonly IEncryptionService _encryption;
@@ -122,14 +119,8 @@ public class BotsController : ControllerBase
     {
         var userId = GetUserId();
 
-        // Validate preset ownership
-        if (req.LLMProviderPresetId.HasValue &&
-            !await _db.LLMProviderPresets.AnyAsync(p => p.Id == req.LLMProviderPresetId && p.UserId == userId, ct))
-            return BadRequest("LLMProviderPresetId does not belong to this user.");
-
-        if (req.EmbeddingPresetId.HasValue &&
-            !await _db.LLMProviderPresets.AnyAsync(p => p.Id == req.EmbeddingPresetId && p.UserId == userId, ct))
-            return BadRequest("EmbeddingPresetId does not belong to this user.");
+        if (await ValidatePresetOwnershipAsync(req.LLMProviderPresetId, req.EmbeddingPresetId, userId, ct)
+            is { } presetError) return presetError;
 
         var bot = new Bot
         {
@@ -179,13 +170,8 @@ public class BotsController : ControllerBase
         var bot = await _db.Bots.FindAsync([id], ct);
         if (bot is null || bot.OwnerId != userId) return NotFound();
 
-        if (req.LLMProviderPresetId.HasValue &&
-            !await _db.LLMProviderPresets.AnyAsync(p => p.Id == req.LLMProviderPresetId && p.UserId == userId, ct))
-            return BadRequest("LLMProviderPresetId does not belong to this user.");
-
-        if (req.EmbeddingPresetId.HasValue &&
-            !await _db.LLMProviderPresets.AnyAsync(p => p.Id == req.EmbeddingPresetId && p.UserId == userId, ct))
-            return BadRequest("EmbeddingPresetId does not belong to this user.");
+        if (await ValidatePresetOwnershipAsync(req.LLMProviderPresetId, req.EmbeddingPresetId, userId, ct)
+            is { } presetError) return presetError;
 
         if (req.Name is not null) bot.Name = req.Name;
         if (req.Age.HasValue) bot.Age = req.Age;
@@ -208,10 +194,14 @@ public class BotsController : ControllerBase
         string? newRawToken = null;
         if (req.TelegramBotToken is not null)
         {
-            var encryptedNew = _encryption.Encrypt(req.TelegramBotToken);
-            if (encryptedNew != bot.EncryptedTelegramBotToken)
+            // Compare plaintexts: AES-CBC uses a random IV so encrypting twice never yields the
+            // same ciphertext, making a ciphertext == ciphertext check always true (always "changed").
+            var existingPlainToken = bot.EncryptedTelegramBotToken is not null
+                ? _encryption.Decrypt(bot.EncryptedTelegramBotToken)
+                : null;
+            if (req.TelegramBotToken != existingPlainToken)
             {
-                bot.EncryptedTelegramBotToken = encryptedNew;
+                bot.EncryptedTelegramBotToken = _encryption.Encrypt(req.TelegramBotToken);
                 newRawToken = req.TelegramBotToken;
                 tokenChanged = true;
 
@@ -321,6 +311,27 @@ public class BotsController : ControllerBase
 
     // ── Helpers ───────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Returns a BadRequest result if either preset ID is provided but does not belong to the user.
+    /// Returns null if all checks pass.
+    /// </summary>
+    private async Task<BadRequestObjectResult?> ValidatePresetOwnershipAsync(
+        Guid? llmPresetId,
+        Guid? embeddingPresetId,
+        Guid userId,
+        CancellationToken ct)
+    {
+        if (llmPresetId.HasValue &&
+            !await _db.LLMProviderPresets.AnyAsync(p => p.Id == llmPresetId && p.UserId == userId, ct))
+            return BadRequest("LLMProviderPresetId does not belong to this user.");
+
+        if (embeddingPresetId.HasValue &&
+            !await _db.LLMProviderPresets.AnyAsync(p => p.Id == embeddingPresetId && p.UserId == userId, ct))
+            return BadRequest("EmbeddingPresetId does not belong to this user.");
+
+        return null;
+    }
+
     private void AddOwnerToAccessList(Bot bot, long telegramId)
     {
         _db.BotAccessLists.Add(new BotAccessList
@@ -343,7 +354,4 @@ public class BotsController : ControllerBase
         HasTelegramToken: b.EncryptedTelegramBotToken is not null,
         b.CreatedAt, b.UpdatedAt);
 
-    private Guid GetUserId() =>
-        Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
 }

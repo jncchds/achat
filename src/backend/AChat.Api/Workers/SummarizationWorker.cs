@@ -51,11 +51,11 @@ public class SummarizationWorker : BackgroundService
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var factory = scope.ServiceProvider.GetRequiredService<ILLMProviderFactory>();
 
-        // Find bot+user pairs with unsummarized messages beyond threshold
+        // Find (bot, user, conversation) groups whose total message count exceeds the
+        // threshold. SummarizeAsync validates the unsummarized count before proceeding,
+        // so over-triggering here is safe.
         var pairs = await db.Messages
-            .Where(m => !db.BotMemorySummaries
-                .Any(s => s.BotId == m.BotId && s.UserId == m.UserId && s.ConversationId == m.ConversationId
-                          && s.MessageRangeEnd == m.Id))
+            .Where(m => m.Role != MessageRole.System)
             .GroupBy(m => new { m.BotId, m.UserId, m.ConversationId })
             .Select(g => new { g.Key.BotId, g.Key.UserId, g.Key.ConversationId, Count = g.Count() })
             .Where(x => x.Count > _opts.SummarizationThreshold)
@@ -91,16 +91,18 @@ public class SummarizationWorker : BackgroundService
 
         if (bot?.LLMProviderPreset is null) return;
 
-        // Get oldest N messages not yet covered by a summary
-        var summarizedIds = await db.BotMemorySummaries
+        // Find the creation time of the last summarized message so we only fetch messages
+        // that come after it. MaxAsync on a nullable projection returns null when there are
+        // no summaries yet, meaning all messages are candidates.
+        var latestSummaryEndTime = await db.BotMemorySummaries
             .Where(s => s.BotId == botId && s.UserId == userId && s.ConversationId == conversationId)
-            .Select(s => s.MessageRangeEnd)
-            .ToListAsync(ct);
+            .Join(db.Messages, s => s.MessageRangeEnd, m => m.Id, (s, m) => (DateTime?)m.CreatedAt)
+            .MaxAsync(ct);
 
         var messages = await db.Messages
             .Where(m => m.BotId == botId && m.UserId == userId
                         && m.ConversationId == conversationId
-                        && !summarizedIds.Contains(m.Id)
+                        && (latestSummaryEndTime == null || m.CreatedAt > latestSummaryEndTime)
                         && m.Role != MessageRole.System)
             .OrderBy(m => m.CreatedAt)
             .Take(_opts.SummarizationBatchSize)

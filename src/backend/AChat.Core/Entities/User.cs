@@ -14,4 +14,5 @@ public class User
     public ICollection<Bot> Bots { get; set; } = [];
     public ICollection<BotConversation> Conversations { get; set; } = [];
     public ICollection<BotConversationState> ConversationStates { get; set; } = [];
+    public ICollection<LLMProviderUsageStat> LLMProviderUsageStats { get; set; } = [];
 }

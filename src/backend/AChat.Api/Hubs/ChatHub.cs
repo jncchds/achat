@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Text;
 using AChat.Core.Entities;
 using AChat.Core.LLM;
+using AChat.Core.Services;
 using AChat.Infrastructure;
 using AChat.Infrastructure.Data;
 using AChat.Infrastructure.LLM;
@@ -20,6 +21,7 @@ public class ChatHub : Hub
 {
     private readonly AppDbContext _db;
     private readonly ILLMProviderFactory _providerFactory;
+    private readonly ILLMUsageStatsRecorder _usageStatsRecorder;
     private readonly EvolutionOptions _evolutionOptions;
     private readonly IChatConnectionRegistry _connectionRegistry;
 
@@ -29,11 +31,13 @@ public class ChatHub : Hub
     public ChatHub(
         AppDbContext db,
         ILLMProviderFactory providerFactory,
+        ILLMUsageStatsRecorder usageStatsRecorder,
         IOptions<EvolutionOptions> evolutionOptions,
         IChatConnectionRegistry connectionRegistry)
     {
         _db = db;
         _providerFactory = providerFactory;
+        _usageStatsRecorder = usageStatsRecorder;
         _evolutionOptions = evolutionOptions.Value;
         _connectionRegistry = connectionRegistry;
     }
@@ -168,11 +172,18 @@ public class ChatHub : Hub
             // Stream response
             var chatProvider = _providerFactory.GetChatProvider(bot.LLMProviderPreset);
             var responseTokens = new StringBuilder();
+            LLMTokenUsageStats? usage = null;
 
-            await foreach (var chunk in chatProvider.StreamChatAsync(chatRequest, ct))
+            await foreach (var update in chatProvider.StreamChatCompletionAsync(chatRequest, ct))
             {
-                responseTokens.Append(chunk);
-                await Clients.Caller.SendAsync("ReceiveToken", chunk, ct);
+                if (!string.IsNullOrEmpty(update.Content))
+                {
+                    responseTokens.Append(update.Content);
+                    await Clients.Caller.SendAsync("ReceiveToken", update.Content, ct);
+                }
+
+                if (update.Usage is not null)
+                    usage = update.Usage;
             }
 
             // Persist assistant message
@@ -192,6 +203,13 @@ public class ChatHub : Hub
             conversation.UpdatedAt = DateTime.UtcNow;
             conversation.LastMessageAt = DateTime.UtcNow;
             await _db.SaveChangesAsync(ct);
+
+            await _usageStatsRecorder.RecordAsync(
+                userId,
+                botId,
+                bot.LLMProviderPreset,
+                usage,
+                ct);
 
             // Generate embedding for assistant message
             if (bot.EmbeddingPreset is not null && queryEmbedding is not null)

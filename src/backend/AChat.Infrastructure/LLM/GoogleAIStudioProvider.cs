@@ -32,29 +32,29 @@ public class GoogleAIStudioProvider : ILLMChatProvider, ILLMEmbeddingProvider
         return http;
     }
 
-    public async Task<string> GenerateChatAsync(LLMChatRequest request, CancellationToken ct = default)
+    public async Task<LLMChatCompletionResult> GenerateChatCompletionAsync(LLMChatRequest request, CancellationToken ct = default)
     {
-        var sb = new StringBuilder();
-        await foreach (var chunk in StreamChatAsync(request, ct))
-            sb.Append(chunk);
-        return sb.ToString();
+        var body = BuildRequestBody(request);
+
+        var url = $"models/{_model}:generateContent?key={_apiKey}";
+        using var response = await CreateHttpClient().PostAsync(url,
+            new StringContent(body, Encoding.UTF8, "application/json"), ct);
+        response.EnsureSuccessStatusCode();
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+
+        return new LLMChatCompletionResult
+        {
+            Content = ExtractResponseText(doc.RootElement),
+            Usage = TryParseUsage(doc.RootElement)
+        };
     }
 
-    public async IAsyncEnumerable<string> StreamChatAsync(
+    public async IAsyncEnumerable<LLMChatStreamUpdate> StreamChatCompletionAsync(
         LLMChatRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var contents = request.Messages.Select(m => new
-        {
-            role = m.Role == "assistant" ? "model" : "user",
-            parts = new[] { new { text = m.Content } }
-        }).ToList();
-
-        var body = JsonSerializer.Serialize(new
-        {
-            system_instruction = new { parts = new[] { new { text = request.SystemPrompt } } },
-            contents
-        });
+        var body = BuildRequestBody(request);
 
         var url = $"models/{_model}:streamGenerateContent?alt=sse&key={_apiKey}";
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
@@ -77,17 +77,95 @@ public class GoogleAIStudioProvider : ILLMChatProvider, ILLMEmbeddingProvider
 
             var data = line["data: ".Length..];
             using var doc = JsonDocument.Parse(data);
+            var root = doc.RootElement;
 
-            var text = doc.RootElement
-                .GetProperty("candidates")[0]
-                .GetProperty("content")
-                .GetProperty("parts")[0]
-                .GetProperty("text")
-                .GetString();
-
+            var text = ExtractResponseText(root);
             if (!string.IsNullOrEmpty(text))
-                yield return text;
+                yield return new LLMChatStreamUpdate { Content = text };
+
+            var usage = TryParseUsage(root);
+            if (usage is not null)
+                yield return new LLMChatStreamUpdate { Usage = usage };
         }
+    }
+
+    public async Task<string> GenerateChatAsync(LLMChatRequest request, CancellationToken ct = default)
+    {
+        var result = await GenerateChatCompletionAsync(request, ct);
+        return result.Content;
+    }
+
+    public async IAsyncEnumerable<string> StreamChatAsync(
+        LLMChatRequest request,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var update in StreamChatCompletionAsync(request, ct))
+        {
+            if (!string.IsNullOrEmpty(update.Content))
+                yield return update.Content;
+        }
+    }
+
+    private static string BuildRequestBody(LLMChatRequest request)
+    {
+        var contents = request.Messages.Select(m => new
+        {
+            role = m.Role == "assistant" ? "model" : "user",
+            parts = new[] { new { text = m.Content } }
+        }).ToList();
+
+        return JsonSerializer.Serialize(new
+        {
+            system_instruction = new { parts = new[] { new { text = request.SystemPrompt } } },
+            contents,
+            generationConfig = new
+            {
+                temperature = request.Temperature,
+                maxOutputTokens = request.MaxTokens
+            }
+        }, new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
+    }
+
+    private static string ExtractResponseText(JsonElement root)
+    {
+        if (!root.TryGetProperty("candidates", out var candidates)
+            || candidates.ValueKind != JsonValueKind.Array
+            || candidates.GetArrayLength() == 0)
+            return string.Empty;
+
+        var parts = candidates[0]
+            .GetProperty("content")
+            .GetProperty("parts")
+            .EnumerateArray()
+            .Where(p => p.TryGetProperty("text", out _))
+            .Select(p => p.GetProperty("text").GetString())
+            .Where(t => !string.IsNullOrEmpty(t));
+
+        return string.Concat(parts);
+    }
+
+    private static LLMTokenUsageStats? TryParseUsage(JsonElement root)
+    {
+        if (!root.TryGetProperty("usageMetadata", out var usage)
+            || usage.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var promptTokens = usage.TryGetProperty("promptTokenCount", out var prompt)
+            ? prompt.GetInt32()
+            : (int?)null;
+        var completionTokens = usage.TryGetProperty("candidatesTokenCount", out var completion)
+            ? completion.GetInt32()
+            : (int?)null;
+        var totalTokens = usage.TryGetProperty("totalTokenCount", out var total)
+            ? total.GetInt32()
+            : (int?)null;
+
+        return new LLMTokenUsageStats
+        {
+            PromptTokens = promptTokens,
+            CompletionTokens = completionTokens,
+            TotalTokens = totalTokens
+        };
     }
 
     public async Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken ct = default)

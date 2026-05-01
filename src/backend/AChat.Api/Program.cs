@@ -84,6 +84,7 @@ builder.Services.Configure<EvolutionOptions>(builder.Configuration.GetSection("E
 
 // LLM factory
 builder.Services.AddSingleton<ILLMProviderFactory, LLMProviderFactory>();
+builder.Services.AddScoped<ILLMUsageStatsRecorder, LLMUsageStatsRecorder>();
 
 // Telegram webhook service
 builder.Services.AddHttpClient<ITelegramWebhookService, TelegramWebhookService>();
@@ -98,9 +99,10 @@ builder.Services.AddScoped<TelegramHandlerService>(sp =>
 {
     var db = sp.GetRequiredService<AppDbContext>();
     var factory = sp.GetRequiredService<ILLMProviderFactory>();
+    var usageStatsRecorder = sp.GetRequiredService<ILLMUsageStatsRecorder>();
     var opts = sp.GetRequiredService<IOptions<EvolutionOptions>>();
     var dispatcher = sp.GetRequiredService<ITelegramRequestDispatcher>();
-    return new TelegramHandlerService(db, factory, dispatcher, opts, opts.Value.RagTopK, opts.Value.RecentMessageWindowSize);
+    return new TelegramHandlerService(db, factory, usageStatsRecorder, dispatcher, opts, opts.Value.RagTopK, opts.Value.RecentMessageWindowSize);
 });
 
 // Background workers

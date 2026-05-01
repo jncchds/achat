@@ -16,6 +16,7 @@ public sealed class BotInitiatedMessageService : IBotInitiatedMessageService
 {
     private readonly AppDbContext _db;
     private readonly ILLMProviderFactory _providerFactory;
+    private readonly ILLMUsageStatsRecorder _usageStatsRecorder;
     private readonly IChatConnectionRegistry _connectionRegistry;
     private readonly IHubContext<ChatHub> _hubContext;
     private readonly EvolutionOptions _evolutionOptions;
@@ -23,12 +24,14 @@ public sealed class BotInitiatedMessageService : IBotInitiatedMessageService
     public BotInitiatedMessageService(
         AppDbContext db,
         ILLMProviderFactory providerFactory,
+        ILLMUsageStatsRecorder usageStatsRecorder,
         IChatConnectionRegistry connectionRegistry,
         IHubContext<ChatHub> hubContext,
         IOptions<EvolutionOptions> evolutionOptions)
     {
         _db = db;
         _providerFactory = providerFactory;
+        _usageStatsRecorder = usageStatsRecorder;
         _connectionRegistry = connectionRegistry;
         _hubContext = hubContext;
         _evolutionOptions = evolutionOptions.Value;
@@ -105,15 +108,22 @@ public sealed class BotInitiatedMessageService : IBotInitiatedMessageService
 
         var chatProvider = _providerFactory.GetChatProvider(bot.LLMProviderPreset);
         var responseTokens = new StringBuilder();
+        LLMTokenUsageStats? usage = null;
 
         // Notify all active connections about the incoming bot-initiated message
         var clients = _hubContext.Clients.Clients(connections);
         await clients.SendAsync("BotInitiatedMessageStart", botId, conversation.Id, ct);
 
-        await foreach (var chunk in chatProvider.StreamChatAsync(chatRequest, ct))
+        await foreach (var update in chatProvider.StreamChatCompletionAsync(chatRequest, ct))
         {
-            responseTokens.Append(chunk);
-            await clients.SendAsync("ReceiveToken", chunk, ct);
+            if (!string.IsNullOrEmpty(update.Content))
+            {
+                responseTokens.Append(update.Content);
+                await clients.SendAsync("ReceiveToken", update.Content, ct);
+            }
+
+            if (update.Usage is not null)
+                usage = update.Usage;
         }
 
         var assistantMessage = new Message
@@ -131,6 +141,13 @@ public sealed class BotInitiatedMessageService : IBotInitiatedMessageService
         conversation.UpdatedAt = DateTime.UtcNow;
         conversation.LastMessageAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+
+        await _usageStatsRecorder.RecordAsync(
+            userId,
+            bot.Id,
+            bot.LLMProviderPreset,
+            usage,
+            ct);
 
         await clients.SendAsync("ReceiveMessageComplete", assistantMessage.Id, ct);
     }

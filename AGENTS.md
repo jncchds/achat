@@ -64,6 +64,7 @@ achat/
 | `BotAccessList` | BotId, SubjectType (AchatUser/TelegramUser), SubjectId (string), Status (Allowed/Denied) |
 | `BotAccessRequest` | BotId, SubjectType, SubjectId, DisplayName?, Status (Pending/Approved/Denied), ResolvedByUserId? |
 | `TelegramOutboundMessage` | BotId, CommandType, payload fields (ChatId/Text/etc.), AttemptCount, AvailableAt, LastError |
+| `LLMProviderUsageStat` | UserId, BotId?, LLMProviderPresetId?, Provider, ProviderUrl, PromptModel, PromptTokens?, CompletionTokens?, TotalTokens? |
 
 **Access control applies to both web and Telegram.**  
 Bot owner is always implicitly allowed on web. Owner is auto-added to `BotAccessList(Allowed)` when `EncryptedTelegramBotToken` is first set.
@@ -77,7 +78,8 @@ Bot owner is always implicitly allowed on web. Owner is auto-added to `BotAccess
 - **Interfaces**: `ILLMChatProvider`, `ILLMEmbeddingProvider`, `ILLMProviderFactory` (in `AChat.Core/LLM/`)
 - **Implementations** (in `AChat.Infrastructure/LLM/`): `OllamaProvider`, `OpenAIProvider`, `GoogleAIStudioProvider`
 - Factory resolves provider from a `LLMProviderPreset`
-- Chat streaming uses `IAsyncEnumerable<string>` piped through SignalR
+- Chat providers expose completion/stream APIs with optional token usage metadata (`PromptTokens`, `CompletionTokens`, `TotalTokens`)
+- Runtime usage is persisted per user in `LLMProviderUsageStats` via `ILLMUsageStatsRecorder`
 
 ---
 

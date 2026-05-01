@@ -28,4 +28,5 @@ public class Bot
     public ICollection<BotPersonaSnapshot> PersonaSnapshots { get; set; } = [];
     public ICollection<BotAccessList> AccessList { get; set; } = [];
     public ICollection<BotAccessRequest> AccessRequests { get; set; } = [];
+    public ICollection<LLMProviderUsageStat> LLMProviderUsageStats { get; set; } = [];
 }

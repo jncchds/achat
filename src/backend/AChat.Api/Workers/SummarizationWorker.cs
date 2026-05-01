@@ -1,6 +1,7 @@
 using AChat.Infrastructure;
 using AChat.Core.Entities;
 using AChat.Core.LLM;
+using AChat.Core.Services;
 using AChat.Infrastructure.Data;
 using AChat.Infrastructure.LLM;
 using Microsoft.EntityFrameworkCore;
@@ -51,6 +52,7 @@ public class SummarizationWorker : BackgroundService
         await using var scope = _scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var factory = scope.ServiceProvider.GetRequiredService<ILLMProviderFactory>();
+        var usageStatsRecorder = scope.ServiceProvider.GetRequiredService<ILLMUsageStatsRecorder>();
 
         // Find (bot, user, conversation) groups whose total message count exceeds the
         // threshold. SummarizeAsync validates the unsummarized count before proceeding,
@@ -66,7 +68,7 @@ public class SummarizationWorker : BackgroundService
         {
             try
             {
-                await SummarizeAsync(db, factory, pair.BotId, pair.UserId, pair.ConversationId, ct);
+                await SummarizeAsync(db, factory, usageStatsRecorder, pair.BotId, pair.UserId, pair.ConversationId, ct);
             }
             catch (Exception ex)
             {
@@ -80,6 +82,7 @@ public class SummarizationWorker : BackgroundService
     private async Task SummarizeAsync(
         AppDbContext db,
         ILLMProviderFactory factory,
+        ILLMUsageStatsRecorder usageStatsRecorder,
         Guid botId,
         Guid userId,
         Guid conversationId,
@@ -129,7 +132,15 @@ public class SummarizationWorker : BackgroundService
         };
 
         var chatProvider = factory.GetChatProvider(bot.LLMProviderPreset);
-        var summaryText = await chatProvider.GenerateChatAsync(summaryRequest, ct);
+        var summaryCompletion = await chatProvider.GenerateChatCompletionAsync(summaryRequest, ct);
+        var summaryText = summaryCompletion.Content;
+
+        await usageStatsRecorder.RecordAsync(
+            userId,
+            botId,
+            bot.LLMProviderPreset,
+            summaryCompletion.Usage,
+            ct);
 
         var summary = new BotMemorySummary
         {

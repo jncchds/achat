@@ -1,5 +1,6 @@
 using AChat.Core.Entities;
 using AChat.Core.LLM;
+using AChat.Core.Services;
 using AChat.Infrastructure.Data;
 using AChat.Infrastructure.LLM;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +19,7 @@ public class TelegramHandlerService
 {
     private readonly AppDbContext _db;
     private readonly ILLMProviderFactory _providerFactory;
+    private readonly ILLMUsageStatsRecorder _usageStatsRecorder;
     private readonly ITelegramRequestDispatcher _dispatcher;
     private readonly EvolutionOptions _evolutionOptions;
     private readonly int _ragTopK;
@@ -26,6 +28,7 @@ public class TelegramHandlerService
     public TelegramHandlerService(
         AppDbContext db,
         ILLMProviderFactory providerFactory,
+        ILLMUsageStatsRecorder usageStatsRecorder,
         ITelegramRequestDispatcher dispatcher,
         IOptions<EvolutionOptions> evolutionOptions,
         int ragTopK = 5,
@@ -33,6 +36,7 @@ public class TelegramHandlerService
     {
         _db = db;
         _providerFactory = providerFactory;
+        _usageStatsRecorder = usageStatsRecorder;
         _dispatcher = dispatcher;
         _evolutionOptions = evolutionOptions.Value;
         _ragTopK = ragTopK;
@@ -191,7 +195,8 @@ public class TelegramHandlerService
             ct);
 
         var chatProvider = _providerFactory.GetChatProvider(bot.LLMProviderPreset);
-        var responseText = await chatProvider.GenerateChatAsync(chatRequest, ct);
+        var completion = await chatProvider.GenerateChatCompletionAsync(chatRequest, ct);
+        var responseText = completion.Content;
 
         // Persist assistant message
         var assistantMsg = new DomainMessage
@@ -210,6 +215,13 @@ public class TelegramHandlerService
         conversation.UpdatedAt = DateTime.UtcNow;
         conversation.LastMessageAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+
+        await _usageStatsRecorder.RecordAsync(
+            user.Id,
+            bot.Id,
+            bot.LLMProviderPreset,
+            completion.Usage,
+            ct);
 
         // Embed assistant message
         if (bot.EmbeddingPreset is not null)

@@ -2,6 +2,7 @@ using AChat.Core.Services;
 using AChat.Infrastructure;
 using AChat.Core.Entities;
 using AChat.Core.LLM;
+using AChat.Core.Services;
 using AChat.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -50,6 +51,7 @@ public class PersonaEvolutionWorker : BackgroundService
         await using var scope = _scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var factory = scope.ServiceProvider.GetRequiredService<ILLMProviderFactory>();
+        var usageStatsRecorder = scope.ServiceProvider.GetRequiredService<ILLMUsageStatsRecorder>();
         var initiatedMessageService = scope.ServiceProvider.GetRequiredService<IBotInitiatedMessageService>();
 
         // Find bots with enough new messages since the last persona snapshot
@@ -62,7 +64,7 @@ public class PersonaEvolutionWorker : BackgroundService
         {
             try
             {
-                var evolved = await MaybeEvolveAsync(db, factory, bot, ct);
+                var evolved = await MaybeEvolveAsync(db, factory, usageStatsRecorder, bot, ct);
                 if (evolved && _opts.BotInitiatesAfterEvolution)
                 {
                     try
@@ -86,6 +88,7 @@ public class PersonaEvolutionWorker : BackgroundService
     private async Task<bool> MaybeEvolveAsync(
         AppDbContext db,
         ILLMProviderFactory factory,
+        ILLMUsageStatsRecorder usageStatsRecorder,
         Bot bot,
         CancellationToken ct)
     {
@@ -152,7 +155,15 @@ public class PersonaEvolutionWorker : BackgroundService
         };
 
         var chatProvider = factory.GetChatProvider(bot.LLMProviderPreset);
-        var newPersona = await chatProvider.GenerateChatAsync(evolveRequest, ct);
+        var evolveCompletion = await chatProvider.GenerateChatCompletionAsync(evolveRequest, ct);
+        var newPersona = evolveCompletion.Content;
+
+        await usageStatsRecorder.RecordAsync(
+            ownerUser.Id,
+            bot.Id,
+            bot.LLMProviderPreset,
+            evolveCompletion.Usage,
+            ct);
 
         // Save snapshot of old persona
         db.BotPersonaSnapshots.Add(new BotPersonaSnapshot

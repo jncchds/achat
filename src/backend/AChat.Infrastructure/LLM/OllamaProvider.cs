@@ -28,23 +28,48 @@ public class OllamaProvider : ILLMChatProvider, ILLMEmbeddingProvider
         return http;
     }
 
-    public async Task<string> GenerateChatAsync(LLMChatRequest request, CancellationToken ct = default)
+    public async Task<LLMChatCompletionResult> GenerateChatCompletionAsync(LLMChatRequest request, CancellationToken ct = default)
     {
-        var sb = new StringBuilder();
-        await foreach (var chunk in StreamChatAsync(request, ct))
-            sb.Append(chunk);
-        return sb.ToString();
+        var messages = BuildMessages(request);
+
+        var body = JsonSerializer.Serialize(new
+        {
+            model = _model,
+            messages,
+            stream = false,
+            options = new
+            {
+                temperature = request.Temperature,
+                num_predict = request.MaxTokens
+            }
+        }, new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
+
+        using var response = await CreateHttpClient().PostAsync(
+            "api/chat",
+            new StringContent(body, Encoding.UTF8, "application/json"),
+            ct);
+        response.EnsureSuccessStatusCode();
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        var root = doc.RootElement;
+
+        var content = root
+            .GetProperty("message")
+            .GetProperty("content")
+            .GetString() ?? string.Empty;
+
+        return new LLMChatCompletionResult
+        {
+            Content = content,
+            Usage = TryParseUsage(root)
+        };
     }
 
-    public async IAsyncEnumerable<string> StreamChatAsync(
+    public async IAsyncEnumerable<LLMChatStreamUpdate> StreamChatCompletionAsync(
         LLMChatRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var messages = new List<object>
-        {
-            new { role = "system", content = request.SystemPrompt }
-        };
-        messages.AddRange(request.Messages.Select(m => new { role = m.Role, content = m.Content }));
+        var messages = BuildMessages(request);
 
         var body = JsonSerializer.Serialize(new
         {
@@ -56,7 +81,7 @@ public class OllamaProvider : ILLMChatProvider, ILLMEmbeddingProvider
                 temperature = request.Temperature,
                 num_predict = request.MaxTokens
             }
-        });
+        }, new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
 
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, "api/chat")
         {
@@ -76,17 +101,71 @@ public class OllamaProvider : ILLMChatProvider, ILLMEmbeddingProvider
             if (string.IsNullOrWhiteSpace(line)) continue;
 
             using var doc = JsonDocument.Parse(line);
-            var content = doc.RootElement
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString();
+            var root = doc.RootElement;
+            if (root.TryGetProperty("message", out var message)
+                && message.TryGetProperty("content", out var contentElement))
+            {
+                var content = contentElement.GetString();
+                if (!string.IsNullOrEmpty(content))
+                    yield return new LLMChatStreamUpdate { Content = content };
+            }
 
-            if (!string.IsNullOrEmpty(content))
-                yield return content;
+            if (root.TryGetProperty("done", out var done) && done.GetBoolean())
+            {
+                var usage = TryParseUsage(root);
+                if (usage is not null)
+                    yield return new LLMChatStreamUpdate { Usage = usage };
 
-            if (doc.RootElement.TryGetProperty("done", out var done) && done.GetBoolean())
                 yield break;
+            }
         }
+    }
+
+    public async Task<string> GenerateChatAsync(LLMChatRequest request, CancellationToken ct = default)
+    {
+        var result = await GenerateChatCompletionAsync(request, ct);
+        return result.Content;
+    }
+
+    public async IAsyncEnumerable<string> StreamChatAsync(
+        LLMChatRequest request,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var update in StreamChatCompletionAsync(request, ct))
+        {
+            if (!string.IsNullOrEmpty(update.Content))
+                yield return update.Content;
+        }
+    }
+
+    private static List<object> BuildMessages(LLMChatRequest request)
+    {
+        var messages = new List<object>
+        {
+            new { role = "system", content = request.SystemPrompt }
+        };
+        messages.AddRange(request.Messages.Select(m => new { role = m.Role, content = m.Content }));
+        return messages;
+    }
+
+    private static LLMTokenUsageStats? TryParseUsage(JsonElement root)
+    {
+        var promptTokens = root.TryGetProperty("prompt_eval_count", out var prompt)
+            ? prompt.GetInt32()
+            : (int?)null;
+        var completionTokens = root.TryGetProperty("eval_count", out var completion)
+            ? completion.GetInt32()
+            : (int?)null;
+
+        if (!promptTokens.HasValue && !completionTokens.HasValue)
+            return null;
+
+        return new LLMTokenUsageStats
+        {
+            PromptTokens = promptTokens,
+            CompletionTokens = completionTokens,
+            TotalTokens = (promptTokens ?? 0) + (completionTokens ?? 0)
+        };
     }
 
     public async Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken ct = default)

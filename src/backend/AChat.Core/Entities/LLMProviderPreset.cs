@@ -15,4 +15,5 @@ public class LLMProviderPreset
     public DateTime UpdatedAt { get; set; }
 
     public User User { get; set; } = null!;
+    public ICollection<LLMProviderUsageStat> LLMProviderUsageStats { get; set; } = [];
 }

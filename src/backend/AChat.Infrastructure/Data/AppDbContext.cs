@@ -19,6 +19,7 @@ public class AppDbContext : DbContext
     public DbSet<BotAccessList> BotAccessLists => Set<BotAccessList>();
     public DbSet<BotAccessRequest> BotAccessRequests => Set<BotAccessRequest>();
     public DbSet<TelegramOutboundMessage> TelegramOutboundMessages => Set<TelegramOutboundMessage>();
+    public DbSet<LLMProviderUsageStat> LLMProviderUsageStats => Set<LLMProviderUsageStat>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -217,6 +218,31 @@ public class AppDbContext : DbContext
              .WithMany()
              .HasForeignKey(m => m.BotId)
              .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // LLMProviderUsageStat
+        modelBuilder.Entity<LLMProviderUsageStat>(e =>
+        {
+            e.HasKey(s => s.Id);
+            e.Property(s => s.Id).HasDefaultValueSql("gen_random_uuid()");
+            e.Property(s => s.PromptModel).HasMaxLength(256);
+            e.Property(s => s.ProviderUrl).HasMaxLength(2048);
+            e.Property(s => s.CreatedAt).HasDefaultValueSql("now()");
+            e.HasIndex(s => new { s.UserId, s.CreatedAt });
+            e.HasIndex(s => s.BotId);
+            e.HasIndex(s => s.LLMProviderPresetId);
+            e.HasOne(s => s.User)
+             .WithMany(u => u.LLMProviderUsageStats)
+             .HasForeignKey(s => s.UserId)
+             .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(s => s.Bot)
+             .WithMany(b => b.LLMProviderUsageStats)
+             .HasForeignKey(s => s.BotId)
+             .OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(s => s.LLMProviderPreset)
+             .WithMany(p => p.LLMProviderUsageStats)
+             .HasForeignKey(s => s.LLMProviderPresetId)
+             .OnDelete(DeleteBehavior.SetNull);
         });
     }
 }

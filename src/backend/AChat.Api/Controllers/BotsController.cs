@@ -20,17 +20,20 @@ public class BotsController : ApiControllerBase
     private readonly IEncryptionService _encryption;
     private readonly EvolutionOptions _evolutionOptions;
     private readonly ILLMProviderFactory _llmFactory;
+    private readonly ILLMUsageStatsRecorder _usageStatsRecorder;
 
     public BotsController(
         AppDbContext db,
         IEncryptionService encryption,
         IOptions<EvolutionOptions> evolutionOptions,
-        ILLMProviderFactory llmFactory)
+        ILLMProviderFactory llmFactory,
+        ILLMUsageStatsRecorder usageStatsRecorder)
     {
         _db = db;
         _encryption = encryption;
         _evolutionOptions = evolutionOptions.Value;
         _llmFactory = llmFactory;
+        _usageStatsRecorder = usageStatsRecorder;
     }
 
     [HttpPost("randomize-persona")]
@@ -108,9 +111,16 @@ public class BotsController : ApiControllerBase
         };
 
         var provider = _llmFactory.GetChatProvider(preset);
-        var description = await provider.GenerateChatAsync(chatRequest, ct);
+        var completion = await provider.GenerateChatCompletionAsync(chatRequest, ct);
 
-        return Ok(new RandomizePersonaResponse(description.Trim()));
+        await _usageStatsRecorder.RecordAsync(
+            userId,
+            botId: null,
+            preset,
+            completion.Usage,
+            ct);
+
+        return Ok(new RandomizePersonaResponse(completion.Content.Trim()));
     }
 
     [HttpGet]

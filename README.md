@@ -13,6 +13,7 @@ AChat is a multi-user platform for self-evolving chatbots with:
 
 - **Multi-user bot ownership** with JWT auth and per-user presets
 - **LLM abstraction** across Ollama, OpenAI, and Google AI Studio
+- **Per-user LLM usage tracking** (provider, URL, model, prompt/completion/total token stats, optional bot association)
 - **RAG-style memory** via vector embeddings (`pgvector`) for chat context
 - **Conversation management** (list/create/rename/delete + history)
 - **Background evolution engine**:

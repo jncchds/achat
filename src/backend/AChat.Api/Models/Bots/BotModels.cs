@@ -24,7 +24,11 @@ public record UpdateBotRequest(
 
 public record PersonaPushRequest([Required] string Direction);
 
-public record RandomizePersonaRequest(Guid? PresetId);
+public record RandomizePersonaRequest(
+    Guid? PresetId,
+    int? Age,
+    string? Gender,
+    string? CharacterDescription);
 
 public record RandomizePersonaResponse(string CharacterDescription);
 

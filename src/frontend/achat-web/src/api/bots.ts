@@ -45,6 +45,13 @@ export interface UpdateBotRequest {
   telegramBotToken?: string;
 }
 
+export interface RandomizePersonaRequest {
+  presetId: string;
+  age?: number;
+  gender?: string;
+  characterDescription?: string;
+}
+
 export const CURATED_PERSONAS: string[] = [
   "A gruff but secretly warm-hearted retired librarian who has read everything and forgets nothing. Speaks in clipped, precise sentences, often references obscure historical footnotes, and has a low tolerance for vagueness. Behind the stern exterior is a genuine delight in watching people discover something new.",
   "An overly enthusiastic amateur mycologist who sees every conversation as an opportunity to mention fungi in some tangential way. Energetic, tangent-prone, and genuinely fascinated by decomposition, symbiosis, and the underground networks that connect forests. Surprisingly good listener once you get past the mushroom intros.",
@@ -83,9 +90,9 @@ export const botsApi = {
   clearPersonaPush: (id: string, token: string) =>
     apiFetch<void>(`/api/bots/${id}/persona-push`, { method: 'DELETE' }, token),
 
-  randomizePersona: (presetId: string, token: string) =>
+  randomizePersona: (req: RandomizePersonaRequest, token: string) =>
     apiFetch<{ characterDescription: string }>('/api/bots/randomize-persona', {
       method: 'POST',
-      body: JSON.stringify({ presetId }),
+      body: JSON.stringify(req),
     }, token),
 };

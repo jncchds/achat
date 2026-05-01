@@ -52,7 +52,12 @@ export function BotSettingsPage() {
     setRandomizing(true);
     try {
       if (llmPresetId) {
-        const result = await botsApi.randomizePersona(llmPresetId, token!);
+        const result = await botsApi.randomizePersona({
+          presetId: llmPresetId,
+          age: age ? parseInt(age) : undefined,
+          gender: gender.trim() || undefined,
+          characterDescription: characterDescription.trim() || undefined,
+        }, token!);
         setCharacterDescription(result.characterDescription);
       } else {
         // Curated fallback — pick one different from what's currently shown

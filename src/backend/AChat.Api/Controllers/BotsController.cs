@@ -69,10 +69,24 @@ public class BotsController : ApiControllerBase
         };
         var seed = seeds[Random.Shared.Next(seeds.Length)];
 
+        var ageHint = req.Age.HasValue
+            ? $"- Age: {req.Age.Value}. Keep this age coherent in background and tone.\n"
+            : string.Empty;
+
+        var genderHint = !string.IsNullOrWhiteSpace(req.Gender)
+            ? $"- Gender: {req.Gender}. Reflect this naturally without stereotypes.\n"
+            : string.Empty;
+
+        var baselineHint = !string.IsNullOrWhiteSpace(req.CharacterDescription)
+            ? $"[Baseline Character Description]\n{req.CharacterDescription.Trim()}\n\n" +
+              "Use this baseline as stable ground and evolve/refine it rather than replacing it wholesale.\n\n"
+            : string.Empty;
+
         var chatRequest = new LLMChatRequest
         {
             SystemPrompt = "You are a creative character writer. Generate a unique, vivid chatbot personality description. " +
                            "Include: distinctive traits, quirks, communication style, background hints, and what topics interest them. " +
+                           "If age/gender constraints are provided, keep them consistent. " +
                            "Write in second-person-free prose (do not use 'you'). " +
                            "Keep it 2–3 paragraphs. Return only the description — no titles, no meta-commentary.",
             Messages =
@@ -80,8 +94,15 @@ public class BotsController : ApiControllerBase
                 new ChatMessage
                 {
                     Role = "user",
-                    Content = $"Create a chatbot character inspired by this seed concept: {seed}. " +
-                               "Make it original — the seed is just a starting spark, not a constraint."
+                    Content =
+                        "Create a chatbot character using the following guidance.\n\n" +
+                        "[Seed Concept]\n" +
+                        $"{seed}\n\n" +
+                        "[Constraints]\n" +
+                        ageHint +
+                        genderHint +
+                        baselineHint +
+                        "Make it original — the seed is a spark, not a cage."
                 }
             ]
         };

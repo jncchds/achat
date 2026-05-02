@@ -142,6 +142,35 @@ public class BotsController : ApiControllerBase
         return Ok(ToResponse(bot));
     }
 
+    [HttpGet("{id:guid}/telegram/webhook-info")]
+    public async Task<ActionResult<TelegramWebhookInfoResponse>> GetTelegramWebhookInfo(
+        Guid id,
+        [FromServices] ITelegramWebhookService webhookService,
+        CancellationToken ct)
+    {
+        var bot = await _db.Bots.FindAsync([id], ct);
+        if (bot is null || bot.OwnerId != GetUserId()) return NotFound();
+        if (bot.EncryptedTelegramBotToken is null)
+            return BadRequest("Telegram bot token is not configured for this bot.");
+
+        var token = _encryption.Decrypt(bot.EncryptedTelegramBotToken);
+        var info = await webhookService.GetWebhookInfoAsync(token, ct);
+
+        return Ok(new TelegramWebhookInfoResponse(
+            info.Ok,
+            info.Description,
+            info.Result is null ? null : new TelegramWebhookInfoDetailsResponse(
+                info.Result.Url,
+                info.Result.HasCustomCertificate,
+                info.Result.PendingUpdateCount,
+                info.Result.IpAddress,
+                info.Result.LastErrorDate,
+                info.Result.LastErrorMessage,
+                info.Result.LastSynchronizationErrorDate,
+                info.Result.MaxConnections,
+                info.Result.AllowedUpdates)));
+    }
+
     [HttpPost]
     public async Task<ActionResult<BotResponse>> Create(
         CreateBotRequest req,
@@ -237,15 +266,28 @@ public class BotsController : ApiControllerBase
                 tokenChanged = true;
 
                 // Ensure owner is in access list when token is first set
-                var existingEntry = await _db.BotAccessLists
-                    .AnyAsync(a => a.BotId == id && a.SubjectType == AccessSubjectType.AchatUser
-                                                  && a.SubjectId == userId.ToString(), ct);
-                if (!existingEntry)
+                var owner = await _db.Users.FindAsync([userId], ct);
+                if (owner?.TelegramId is not null)
                 {
-                    var owner = await _db.Users.FindAsync([userId], ct);
-                    if (owner?.TelegramId is not null)
+                    var telegramSubjectId = owner.TelegramId.Value.ToString();
+                    var existingTelegramEntry = await _db.BotAccessLists
+                        .AnyAsync(a => a.BotId == id
+                                       && a.SubjectType == AccessSubjectType.TelegramUser
+                                       && a.SubjectId == telegramSubjectId, ct);
+
+                    if (!existingTelegramEntry)
+                    {
                         AddOwnerToAccessList(bot, owner.TelegramId.Value);
-                    else
+                    }
+                }
+                else
+                {
+                    var existingAchatEntry = await _db.BotAccessLists
+                        .AnyAsync(a => a.BotId == id
+                                       && a.SubjectType == AccessSubjectType.AchatUser
+                                       && a.SubjectId == userId.ToString(), ct);
+
+                    if (!existingAchatEntry)
                     {
                         _db.BotAccessLists.Add(new BotAccessList
                         {

@@ -47,3 +47,19 @@ public record BotResponse(
     bool HasTelegramToken,
     DateTime CreatedAt,
     DateTime UpdatedAt);
+
+public record TelegramWebhookInfoResponse(
+    bool Ok,
+    string? Description,
+    TelegramWebhookInfoDetailsResponse? Result);
+
+public record TelegramWebhookInfoDetailsResponse(
+    string Url,
+    bool HasCustomCertificate,
+    int PendingUpdateCount,
+    string? IpAddress,
+    int? LastErrorDate,
+    string? LastErrorMessage,
+    int? LastSynchronizationErrorDate,
+    int? MaxConnections,
+    IReadOnlyList<string>? AllowedUpdates);

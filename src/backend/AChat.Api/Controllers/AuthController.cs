@@ -48,6 +48,67 @@ public class AuthController : ApiControllerBase
             return Conflict("Telegram ID already linked to another account.");
 
         user.TelegramId = req.TelegramId;
+
+        // Keep owner access-list entries consistent for Telegram flows.
+        // When token was saved before Telegram linking, legacy placeholder entries may exist as
+        // SubjectType=AchatUser with SubjectId=<ownerUserId>. Telegram inbound checks only
+        // SubjectType=TelegramUser with SubjectId=<telegramId>.
+        var ownerBotIds = await _db.Bots
+            .Where(b => b.OwnerId == userId && b.EncryptedTelegramBotToken != null)
+            .Select(b => b.Id)
+            .ToListAsync(ct);
+
+        if (ownerBotIds.Count > 0)
+        {
+            var achatSubjectId = userId.ToString();
+            var telegramSubjectId = req.TelegramId.ToString();
+
+            var existingTelegramAccessBotIds = (await _db.BotAccessLists
+                .Where(a => ownerBotIds.Contains(a.BotId)
+                            && a.SubjectType == AccessSubjectType.TelegramUser
+                            && a.SubjectId == telegramSubjectId)
+                .Select(a => a.BotId)
+                .ToListAsync(ct))
+                .ToHashSet();
+
+            var legacyAchatEntries = await _db.BotAccessLists
+                .Where(a => ownerBotIds.Contains(a.BotId)
+                            && a.SubjectType == AccessSubjectType.AchatUser
+                            && a.SubjectId == achatSubjectId)
+                .ToListAsync(ct);
+
+            foreach (var entry in legacyAchatEntries)
+            {
+                if (existingTelegramAccessBotIds.Contains(entry.BotId))
+                {
+                    _db.BotAccessLists.Remove(entry);
+                    continue;
+                }
+
+                entry.SubjectType = AccessSubjectType.TelegramUser;
+                entry.SubjectId = telegramSubjectId;
+                existingTelegramAccessBotIds.Add(entry.BotId);
+            }
+
+            foreach (var botId in ownerBotIds)
+            {
+                if (existingTelegramAccessBotIds.Contains(botId))
+                {
+                    continue;
+                }
+
+                _db.BotAccessLists.Add(new BotAccessList
+                {
+                    Id = Guid.NewGuid(),
+                    BotId = botId,
+                    SubjectType = AccessSubjectType.TelegramUser,
+                    SubjectId = telegramSubjectId,
+                    Status = AccessStatus.Allowed,
+                    AddedAt = DateTime.UtcNow
+                });
+            }
+        }
+
         await _db.SaveChangesAsync(ct);
         return NoContent();
     }

@@ -37,4 +37,19 @@ public class TelegramWebhookService : ITelegramWebhookService
         var response = await _http.PostAsync(url, null, ct);
         response.EnsureSuccessStatusCode();
     }
+
+    public async Task<TelegramWebhookInfoResult> GetWebhookInfoAsync(string token, CancellationToken ct = default)
+    {
+        var url = $"https://api.telegram.org/bot{token}/getWebhookInfo";
+        var response = await _http.GetAsync(url, ct);
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        var payload = await JsonSerializer.DeserializeAsync<TelegramWebhookInfoResult>(
+            stream,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true },
+            ct);
+
+        return payload ?? new TelegramWebhookInfoResult(false, "Empty response from Telegram getWebhookInfo.", null);
+    }
 }

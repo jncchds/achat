@@ -47,6 +47,10 @@ public class PresetsController(IPresetService presetService) : ControllerBase
     public async Task<IActionResult> GetModels(Guid id, CancellationToken ct) =>
         Ok(await presetService.GetModelsAsync(id, GetUserId(), ct));
 
+    [HttpPost("models")]
+    public async Task<IActionResult> GetModelsInline([FromBody] GetModelsInlineRequest request, CancellationToken ct) =>
+        Ok(await presetService.GetModelsInlineAsync(request, ct));
+
     private Guid GetUserId() =>
         Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 }

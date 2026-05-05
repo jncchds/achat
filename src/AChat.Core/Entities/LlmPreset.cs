@@ -12,6 +12,7 @@ public class LlmPreset
     public string? ApiToken { get; set; }
     public string GenerationModel { get; set; } = string.Empty;
     public string? EmbeddingModel { get; set; }
+    public int? TimeoutSeconds { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 

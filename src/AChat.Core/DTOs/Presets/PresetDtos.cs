@@ -10,6 +10,7 @@ public record PresetDto(
     bool HasApiToken,
     string GenerationModel,
     string? EmbeddingModel,
+    int? TimeoutSeconds,
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
@@ -19,7 +20,8 @@ public record CreatePresetRequest(
     string ProviderUrl,
     string? ApiToken,
     string GenerationModel,
-    string? EmbeddingModel);
+    string? EmbeddingModel,
+    int? TimeoutSeconds);
 
 public record UpdatePresetRequest(
     string? Name,
@@ -27,4 +29,11 @@ public record UpdatePresetRequest(
     string? ProviderUrl,
     string? ApiToken,
     string? GenerationModel,
-    string? EmbeddingModel);
+    string? EmbeddingModel,
+    int? TimeoutSeconds);
+
+public record GetModelsInlineRequest(
+    ProviderType ProviderType,
+    string ProviderUrl,
+    string? ApiToken,
+    string? GenerationModel);

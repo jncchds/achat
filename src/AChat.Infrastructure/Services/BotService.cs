@@ -42,6 +42,7 @@ public partial class BotService(
             PresetId = request.PresetId,
             Name = request.Name,
             Personality = request.Personality,
+            TelegramToken = string.IsNullOrEmpty(request.TelegramToken) ? null : request.TelegramToken,
             Gender = request.Gender,
             Language = request.Language,
             CreatedAt = DateTime.UtcNow,

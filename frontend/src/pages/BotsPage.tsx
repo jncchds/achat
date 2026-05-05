@@ -139,6 +139,14 @@ export default function BotsPage() {
               value={form.language ?? ''} onInputChange={(_, v) => setForm({ ...form, language: v || undefined })}
               renderInput={params => <TextField {...params} label="Language (optional)" />}
             />
+            <TextField
+              label="Telegram Bot Token (optional)"
+              value={form.telegramToken ?? ''}
+              onChange={e => setForm({ ...form, telegramToken: e.target.value || undefined })}
+              fullWidth
+              type="password"
+              helperText="Connect this bot to a Telegram bot. Can be set or changed later in settings."
+            />
           </Box>
         </DialogContent>
         <DialogActions>

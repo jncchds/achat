@@ -10,4 +10,5 @@ public interface IPresetService
     Task<PresetDto?> UpdatePresetAsync(Guid id, Guid userId, UpdatePresetRequest request, CancellationToken ct = default);
     Task<bool> DeletePresetAsync(Guid id, Guid userId, CancellationToken ct = default);
     Task<IReadOnlyList<string>> GetModelsAsync(Guid id, Guid userId, CancellationToken ct = default);
+    Task<IReadOnlyList<string>> GetModelsInlineAsync(GetModelsInlineRequest request, CancellationToken ct = default);
 }

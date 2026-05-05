@@ -8,18 +8,19 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { presetsApi, type PresetDto, type CreatePresetRequest, type ProviderType } from '../api/presets';
+import { presetsApi, type PresetDto, type CreatePresetRequest, type ProviderType, type GetModelsInlineRequest } from '../api/presets';
 
 const PROVIDER_TYPES: ProviderType[] = ['Ollama', 'OpenAI', 'GoogleAI'];
 
 interface FormState {
   name: string; providerType: ProviderType; providerUrl: string;
   apiToken: string; generationModel: string; embeddingModel: string;
+  timeoutSeconds: string;
 }
 
 const emptyForm = (): FormState => ({
   name: '', providerType: 'Ollama', providerUrl: 'http://localhost:11434',
-  apiToken: '', generationModel: '', embeddingModel: ''
+  apiToken: '', generationModel: '', embeddingModel: '', timeoutSeconds: ''
 });
 
 export default function PresetsPage() {
@@ -39,22 +40,27 @@ export default function PresetsPage() {
   const openCreate = () => { setEditing(null); setForm(emptyForm()); setModels([]); setOpen(true); };
   const openEdit = (p: PresetDto) => {
     setEditing(p);
-    setForm({ name: p.name, providerType: p.providerType, providerUrl: p.providerUrl, apiToken: '', generationModel: p.generationModel, embeddingModel: p.embeddingModel ?? '' });
+    setForm({ name: p.name, providerType: p.providerType, providerUrl: p.providerUrl, apiToken: '', generationModel: p.generationModel, embeddingModel: p.embeddingModel ?? '', timeoutSeconds: p.timeoutSeconds != null ? String(p.timeoutSeconds) : '' });
     setModels([]);
     setOpen(true);
   };
 
   const handleSave = () => {
-    const payload: CreatePresetRequest = { name: form.name, providerType: form.providerType, providerUrl: form.providerUrl, apiToken: form.apiToken || undefined, generationModel: form.generationModel, embeddingModel: form.embeddingModel || undefined };
+    const payload: CreatePresetRequest = { name: form.name, providerType: form.providerType, providerUrl: form.providerUrl, apiToken: form.apiToken || undefined, generationModel: form.generationModel, embeddingModel: form.embeddingModel || undefined, timeoutSeconds: form.timeoutSeconds ? Number(form.timeoutSeconds) : undefined };
     if (editing) updateMut.mutate({ id: editing.id, d: payload });
     else createMut.mutate(payload);
   };
 
   const loadModels = async () => {
-    if (!editing) return;
     setLoadingModels(true); setModelError('');
     try {
-      const m = await presetsApi.getModels(editing.id);
+      const payload: GetModelsInlineRequest = {
+        providerType: form.providerType,
+        providerUrl: form.providerUrl,
+        apiToken: form.apiToken || undefined,
+        generationModel: form.generationModel || undefined,
+      };
+      const m = await presetsApi.getModelsInline(payload);
       setModels(m);
     } catch { setModelError('Failed to load models'); }
     finally { setLoadingModels(false); }
@@ -105,13 +111,11 @@ export default function PresetsPage() {
               onInputChange={(_, v) => setForm({ ...form, generationModel: v })}
               renderInput={(params) => <TextField {...params} label="Generation Model" required />}
             />
-            {editing && (
-              <Tooltip title="Load models from provider">
-                <span>
-                  <IconButton onClick={loadModels} disabled={loadingModels}><RefreshIcon /></IconButton>
-                </span>
-              </Tooltip>
-            )}
+            <Tooltip title="Load models from provider">
+              <span>
+                <IconButton onClick={loadModels} disabled={loadingModels}><RefreshIcon /></IconButton>
+              </span>
+            </Tooltip>
           </Box>
           {modelError && <Alert severity="warning">{modelError}</Alert>}
           <Autocomplete
@@ -120,6 +124,15 @@ export default function PresetsPage() {
             value={form.embeddingModel}
             onInputChange={(_, v) => setForm({ ...form, embeddingModel: v })}
             renderInput={(params) => <TextField {...params} label="Embedding Model (optional)" />}
+          />
+          <TextField
+            label="Timeout (seconds, optional)"
+            value={form.timeoutSeconds}
+            onChange={e => setForm({ ...form, timeoutSeconds: e.target.value.replace(/[^0-9]/g, '') })}
+            fullWidth
+            type="number"
+            inputProps={{ min: 1 }}
+            helperText="Leave blank to use the default HTTP timeout"
           />
         </DialogContent>
         <DialogActions>

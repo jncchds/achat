@@ -17,21 +17,22 @@ public static class SemanticKernelFactory
                 builder.AddOpenAIChatCompletion(
                     modelId: preset.GenerationModel,
                     apiKey: preset.ApiToken ?? string.Empty,
-                    httpClient: null);
+                    httpClient: BuildHttpClient(preset));
                 break;
 
             case ProviderType.Ollama:
                 builder.AddOpenAIChatCompletion(
                     modelId: preset.GenerationModel,
                     apiKey: "ollama",
-                    endpoint: BuildOllamaEndpoint(preset.ProviderUrl));
+                    httpClient: BuildHttpClient(preset, BuildOllamaEndpoint(preset.ProviderUrl)));
                 break;
 
             case ProviderType.GoogleAI:
 #pragma warning disable SKEXP0070
                 builder.AddGoogleAIGeminiChatCompletion(
                     modelId: preset.GenerationModel,
-                    apiKey: preset.ApiToken ?? string.Empty);
+                    apiKey: preset.ApiToken ?? string.Empty,
+                    httpClient: BuildHttpClient(preset));
 #pragma warning restore SKEXP0070
                 break;
         }
@@ -49,7 +50,8 @@ public static class SemanticKernelFactory
 #pragma warning disable SKEXP0010
                 builder.AddOpenAIEmbeddingGenerator(
                     modelId: preset.EmbeddingModel ?? "text-embedding-3-small",
-                    apiKey: preset.ApiToken ?? string.Empty);
+                    apiKey: preset.ApiToken ?? string.Empty,
+                    httpClient: BuildHttpClient(preset));
 #pragma warning restore SKEXP0010
                 break;
 
@@ -58,7 +60,7 @@ public static class SemanticKernelFactory
                 builder.AddOpenAIEmbeddingGenerator(
                     modelId: preset.EmbeddingModel ?? preset.GenerationModel,
                     apiKey: "ollama",
-                    httpClient: new HttpClient { BaseAddress = BuildOllamaEndpoint(preset.ProviderUrl) });
+                    httpClient: BuildHttpClient(preset, BuildOllamaEndpoint(preset.ProviderUrl)));
 #pragma warning restore SKEXP0010
                 break;
 
@@ -66,12 +68,24 @@ public static class SemanticKernelFactory
 #pragma warning disable SKEXP0070
                 builder.AddGoogleAIEmbeddingGenerator(
                     modelId: preset.EmbeddingModel ?? "models/text-embedding-004",
-                    apiKey: preset.ApiToken ?? string.Empty);
+                    apiKey: preset.ApiToken ?? string.Empty,
+                    httpClient: BuildHttpClient(preset));
 #pragma warning restore SKEXP0070
                 break;
         }
 
         return builder.Build();
+    }
+
+    private static HttpClient? BuildHttpClient(LlmPreset preset, Uri? baseAddress = null)
+    {
+        if (!preset.TimeoutSeconds.HasValue && baseAddress is null)
+            return null;
+
+        var client = new HttpClient();
+        if (baseAddress is not null) client.BaseAddress = baseAddress;
+        if (preset.TimeoutSeconds.HasValue) client.Timeout = TimeSpan.FromSeconds(preset.TimeoutSeconds.Value);
+        return client;
     }
 
     /// <summary>

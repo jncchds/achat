@@ -6,7 +6,7 @@ export interface BotDto {
   evolutionIntervalHours: number | null;
   lastEvolvedAt: string | null; createdAt: string; updatedAt: string;
 }
-export interface CreateBotRequest { name: string; presetId: string; personality: string; gender?: string; language?: string; }
+export interface CreateBotRequest { name: string; presetId: string; personality: string; telegramToken?: string; gender?: string; language?: string; }
 export interface UpdateBotRequest {
   name?: string; presetId?: string; personality?: string; telegramToken?: string;
   unknownUserReply?: string; gender?: string; language?: string; evolutionIntervalHours?: number | null;

@@ -41,6 +41,7 @@ public partial class PresetService(
             ApiToken = request.ApiToken,
             GenerationModel = request.GenerationModel,
             EmbeddingModel = request.EmbeddingModel,
+            TimeoutSeconds = request.TimeoutSeconds,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
@@ -61,6 +62,7 @@ public partial class PresetService(
         if (request.ApiToken is not null) preset.ApiToken = request.ApiToken;
         if (request.GenerationModel is not null) preset.GenerationModel = request.GenerationModel;
         if (request.EmbeddingModel is not null) preset.EmbeddingModel = request.EmbeddingModel;
+        if (request.TimeoutSeconds is not null) preset.TimeoutSeconds = request.TimeoutSeconds;
         preset.UpdatedAt = DateTime.UtcNow;
 
         await db.SaveChangesAsync(ct);
@@ -86,10 +88,22 @@ public partial class PresetService(
         return await modelListService.GetModelsAsync(preset, ct);
     }
 
+    public Task<IReadOnlyList<string>> GetModelsInlineAsync(GetModelsInlineRequest request, CancellationToken ct = default)
+    {
+        var preset = new LlmPreset
+        {
+            ProviderType = request.ProviderType,
+            ProviderUrl = request.ProviderUrl ?? string.Empty,
+            ApiToken = request.ApiToken,
+            GenerationModel = request.GenerationModel ?? string.Empty,
+        };
+        return modelListService.GetModelsAsync(preset, ct);
+    }
+
     private static PresetDto ToDto(LlmPreset p) => new(
         p.Id, p.Name, p.ProviderType, p.ProviderUrl,
         !string.IsNullOrEmpty(p.ApiToken), p.GenerationModel, p.EmbeddingModel,
-        p.CreatedAt, p.UpdatedAt);
+        p.TimeoutSeconds, p.CreatedAt, p.UpdatedAt);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Preset {PresetId} created for user {UserId}")]
     private static partial void LogPresetCreated(ILogger logger, Guid presetId, Guid userId);

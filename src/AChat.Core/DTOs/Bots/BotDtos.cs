@@ -16,7 +16,7 @@ public record BotDto(
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
-public record CreateBotRequest(string Name, Guid PresetId, string Personality, string? Gender = null, string? Language = null);
+public record CreateBotRequest(string Name, Guid PresetId, string Personality, string? TelegramToken = null, string? Gender = null, string? Language = null);
 
 public record UpdateBotRequest(
     string? Name,

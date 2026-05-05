@@ -193,6 +193,7 @@ public partial class ChatService(
                     BotId = bot.Id,
                     UserId = userId,
                     PresetId = preset.Id,
+                    ConversationId = conversationId,
                     Endpoint = preset.ProviderUrl,
                     ModelName = preset.GenerationModel,
                     InputTokens = inputTokens,

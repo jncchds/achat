@@ -9,7 +9,7 @@ namespace AChat.Api.Controllers;
 [ApiController]
 [Route("api/bots")]
 [Authorize]
-public class BotsController(IBotService botService) : ControllerBase
+public class BotsController(IBotService botService, ILlmUsageService usageService) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> GetAll(CancellationToken ct) =>
@@ -79,6 +79,14 @@ public class BotsController(IBotService botService) : ControllerBase
     [HttpGet("{id:guid}/evolution-history")]
     public async Task<IActionResult> GetEvolutionHistory(Guid id, CancellationToken ct) =>
         Ok(await botService.GetEvolutionHistoryAsync(id, GetUserId(), ct));
+
+    [HttpGet("{id:guid}/usage")]
+    public async Task<IActionResult> GetUsage(
+        Guid id,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken ct = default) =>
+        Ok(await usageService.GetBotUsageForUserAsync(id, GetUserId(), page, Math.Min(pageSize, 100), ct));
 
     private Guid GetUserId() =>
         Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);

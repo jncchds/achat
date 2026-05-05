@@ -1,35 +1,32 @@
 import { useState } from 'react';
+import { useParams, Link } from 'react-router-dom';
 import {
   Box, Typography, Table, TableHead, TableRow, TableCell, TableBody,
-  Paper, TableContainer, Pagination, Chip, Tooltip, Link as MuiLink,
+  Paper, TableContainer, Pagination, Link as MuiLink,
 } from '@mui/material';
-import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { usageApi } from '../api/usage';
-import { useAuth } from '../store/AuthContext';
 
-export default function LlmUsagePage() {
-  const { isAdmin } = useAuth();
+export default function BotUsagePage() {
+  const { botId } = useParams<{ botId: string }>();
   const [page, setPage] = useState(1);
   const pageSize = 20;
 
   const { data, isLoading } = useQuery({
-    queryKey: ['llm-usage', page, isAdmin],
-    queryFn: () => isAdmin ? usageApi.getAllUsage(page, pageSize) : usageApi.getMyUsage(page, pageSize)
+    queryKey: ['bot-usage', botId, page],
+    queryFn: () => usageApi.getBotUsage(botId!, page, pageSize),
   });
 
   const totalPages = data ? Math.ceil(data.totalCount / pageSize) : 1;
 
   return (
     <Box sx={{ p: 3 }}>
-      <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>LLM Usage</Typography>
+      <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>Usage</Typography>
       {isLoading && <Typography>Loading…</Typography>}
       <TableContainer component={Paper}>
         <Table size="small">
           <TableHead>
             <TableRow>
-              {isAdmin && <TableCell>User</TableCell>}
-              <TableCell>Bot</TableCell>
               <TableCell>Model</TableCell>
               <TableCell align="right">In Tokens</TableCell>
               <TableCell align="right">Out Tokens</TableCell>
@@ -40,16 +37,12 @@ export default function LlmUsagePage() {
           <TableBody>
             {data?.items.map(item => (
               <TableRow key={item.id}>
-                {isAdmin && <TableCell>{item.username}</TableCell>}
-                <TableCell>{item.botName ?? <Chip label="—" size="small" />}</TableCell>
-                <TableCell>
-                  <Tooltip title={item.endpoint}><span>{item.modelName}</span></Tooltip>
-                </TableCell>
+                <TableCell>{item.modelName}</TableCell>
                 <TableCell align="right">{item.inputTokens}</TableCell>
                 <TableCell align="right">{item.outputTokens}</TableCell>
                 <TableCell>
-                  {item.conversationId && item.botId
-                    ? <MuiLink component={Link} to={`/bots/${item.botId}/chat/${item.conversationId}`}>Open</MuiLink>
+                  {item.conversationId
+                    ? <MuiLink component={Link} to={`/bots/${botId}/chat/${item.conversationId}`}>Open</MuiLink>
                     : '—'}
                 </TableCell>
                 <TableCell>{new Date(item.createdAt).toLocaleString()}</TableCell>

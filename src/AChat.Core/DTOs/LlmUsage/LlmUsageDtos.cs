@@ -4,6 +4,7 @@ public record LlmInteractionDto(
     Guid Id,
     Guid? BotId,
     string? BotName,
+    Guid? ConversationId,
     Guid UserId,
     string Username,
     Guid? PresetId,

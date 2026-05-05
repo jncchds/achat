@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider, createTheme, CssBaseline, Box } from '@mui/material';
 import { AuthProvider } from './store/AuthContext';
+import { ThemeContextProvider, useThemeContext } from './store/ThemeContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { NavBar } from './components/NavBar';
 import LoginPage from './pages/LoginPage';
@@ -14,10 +15,10 @@ import BotChatLayout from './pages/BotChatLayout';
 import ChatPage from './pages/ChatPage';
 import PresetsPage from './pages/PresetsPage';
 import LlmUsagePage from './pages/LlmUsagePage';
+import BotUsagePage from './pages/BotUsagePage';
 import AdminUsersPage from './pages/AdminUsersPage';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 30_000 } } });
-const theme = createTheme({ palette: { mode: 'light' } });
 
 function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -31,6 +32,7 @@ function AppLayout() {
           <Route path="/bots/:botId/settings" element={<BotSettingsPage />} />
           <Route path="/bots/:botId/evolution" element={<BotEvolutionPage />} />
           <Route path="/bots/:botId/access" element={<BotAccessPage />} />
+          <Route path="/bots/:botId/usage" element={<BotUsagePage />} />
           <Route path="/bots/:botId/chat" element={<BotChatLayout />}>
             <Route path=":conversationId" element={<ChatPage />} />
           </Route>
@@ -46,22 +48,33 @@ function AppLayout() {
   );
 }
 
+function ThemedApp() {
+  const { resolvedMode } = useThemeContext();
+  const theme = useMemo(() => createTheme({ palette: { mode: resolvedMode } }), [resolvedMode]);
+
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <AuthProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route element={<ProtectedRoute />}>
+              <Route path="/*" element={<AppLayout />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
+    </ThemeProvider>
+  );
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider theme={theme}>
-        <CssBaseline />
-        <AuthProvider>
-          <BrowserRouter>
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
-              <Route element={<ProtectedRoute />}>
-                <Route path="/*" element={<AppLayout />} />
-              </Route>
-            </Routes>
-          </BrowserRouter>
-        </AuthProvider>
-      </ThemeProvider>
+      <ThemeContextProvider>
+        <ThemedApp />
+      </ThemeContextProvider>
     </QueryClientProvider>
   );
 }

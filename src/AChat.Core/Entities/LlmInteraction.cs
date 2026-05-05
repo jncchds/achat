@@ -15,7 +15,10 @@ public class LlmInteraction
     public string? Metadata { get; set; }
     public DateTime CreatedAt { get; set; }
 
+    public Guid? ConversationId { get; set; }
+
     public Bot? Bot { get; set; }
     public User User { get; set; } = null!;
     public LlmPreset? Preset { get; set; }
+    public Conversation? Conversation { get; set; }
 }

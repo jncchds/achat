@@ -32,6 +32,12 @@ public class LlmInteractionConfiguration : IEntityTypeConfiguration<LlmInteracti
             .IsRequired(false)
             .OnDelete(DeleteBehavior.SetNull);
 
+        builder.HasOne(i => i.Conversation)
+            .WithMany()
+            .HasForeignKey(i => i.ConversationId)
+            .IsRequired(false)
+            .OnDelete(DeleteBehavior.SetNull);
+
         builder.HasIndex(i => new { i.UserId, i.CreatedAt });
         builder.HasIndex(i => new { i.BotId, i.CreatedAt });
     }

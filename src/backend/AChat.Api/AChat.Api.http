@@ -1,6 +1,0 @@
-@AChat.Api_HostAddress = http://localhost:5145
-
-GET {{AChat.Api_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###

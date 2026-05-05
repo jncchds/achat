@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AChat.Api/AChat.Api.csproj" />
+    <Project Path="src/AChat.Core/AChat.Core.csproj" />
+    <Project Path="src/AChat.Infrastructure/AChat.Infrastructure.csproj" />
+  </Folder>
+</Solution>

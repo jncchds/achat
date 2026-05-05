@@ -1,173 +1,109 @@
-# AChat — Agent Guide
+# AGENTS.md — Architecture & Coding Guide for AChat
 
-This document is the authoritative reference for any AI agent working in this repository.
-Keep it up to date whenever architecture, domain models, API surface, project structure, or conventions change.
-
----
-
-## Project Overview
-
-AChat is a multi-user platform for self-evolving chatbots. Users own bots that adapt their personality over time using three mechanisms:
-1. **RAG memory** — pgvector cosine-similarity retrieval of relevant past messages per conversation
-2. **Conversation summarization** — hosted background task compresses old history into rolling summaries
-3. **Dynamic persona evolution** — hosted background task periodically rewrites the bot's personality based on interaction patterns
-
-Bots are accessible via a React web UI and optionally via their own dedicated Telegram bot.
-
----
-
-## Repository Structure
+## Solution Structure
 
 ```
-achat/
-├── src/
-│   ├── backend/
-│   │   ├── AChat.sln / AChat.slnx
-│   │   ├── AChat.Core/              # Domain models, interfaces (NO infrastructure dependencies)
-│   │   │   ├── Entities/            # All EF entity classes + enums
-│   │   │   ├── LLM/                 # ILLMChatProvider, ILLMEmbeddingProvider, ILLMProviderFactory, LLMChatRequest
-│   │   │   └── Services/            # IEncryptionService
-│   │   ├── AChat.Infrastructure/    # EF Core DbContext, LLM provider impls, Telegram.Bot, AesEncryptionService
-│   │   │   ├── Data/                # AppDbContext, AppDbContextFactory, Migrations/
-│   │   │   ├── LLM/                 # OllamaProvider, OpenAIProvider, GoogleAIStudioProvider, LLMProviderFactory
-│   │   │   ├── Security/            # AesEncryptionService
-│   │   │   └── Telegram/            # TelegramWebhookService, TelegramHandlerService, TelegramRequestDispatcher
-│   │   ├── AChat.Api/               # ASP.NET Core 10 Web API + SignalR + hosted workers
-│   │   │   ├── Controllers/         # AuthController, PresetsController, BotsController, ConversationsController, AccessController, TelegramController
-│   │   │   ├── Hubs/                # ChatHub (SignalR)
-│   │   │   ├── Models/              # Request/response DTOs
-│   │   │   └── Workers/             # SummarizationWorker, PersonaEvolutionWorker
-│   │   └── AChat.Worker/            # Legacy compatibility host (workers run in API)
-│   └── frontend/
-│       └── achat-web/               # React 19 + TypeScript + Vite
-├── docker-compose.yml
-├── docker-compose.override.yml
-├── .env.example
-├── AGENTS.md                        # ← this file
-└── README.md
+src/
+  AChat.Core/          — Pure domain: entities, DTOs, enums, options, service interfaces
+  AChat.Infrastructure/— Implementation: EF DbContext, all service impls, SK, Telegram, jobs
+  AChat.Api/           — ASP.NET Core host: controllers, middleware, Program.cs, DI wiring
+frontend/              — React/TypeScript/Vite SPA (MUI)
 ```
 
----
+`AChat.Core` has **no project references** — everything else depends on it.  
+`AChat.Infrastructure` references `AChat.Core`.  
+`AChat.Api` references both.
 
-## Domain Models (`AChat.Core/Entities/`)
+## Key Conventions
 
-| Entity | Key Fields |
-|---|---|
-| `User` | Id, Email?, PasswordHash?, TelegramId (long?), IsStubAccount |
-| `LLMProviderPreset` | UserId, Name, Provider (enum), EncryptedApiKey, BaseUrl, ModelName, EmbeddingModel, ParametersJson |
-| `Bot` | OwnerId, Name, Age?, Gender (freeform string), CharacterDescription, EvolvingPersonaPrompt, LLMProviderPresetId, EmbeddingPresetId, EncryptedTelegramBotToken |
-| `BotConversation` | BotId, UserId, Title, CreatedAt, UpdatedAt, LastMessageAt |
-| `BotConversationState` | BotId, UserId, CurrentConversationId, UpdatedAt (tracks active conversation per bot+user) |
-| `Message` | BotId, UserId, ConversationId, Role (enum), Content, Embedding (vector), Source (enum: Web/Telegram) |
-| `BotMemorySummary` | BotId, UserId, ConversationId, SummaryText, Embedding (vector), MessageRangeStart, MessageRangeEnd |
-| `BotPersonaSnapshot` | BotId, SnapshotText — immutable audit log of persona changes |
-| `BotAccessList` | BotId, SubjectType (AchatUser/TelegramUser), SubjectId (string), Status (Allowed/Denied) |
-| `BotAccessRequest` | BotId, SubjectType, SubjectId, DisplayName?, Status (Pending/Approved/Denied), ResolvedByUserId? |
-| `TelegramOutboundMessage` | BotId, CommandType, payload fields (ChatId/Text/etc.), AttemptCount, AvailableAt, LastError |
-| `LLMProviderUsageStat` | UserId, BotId?, LLMProviderPresetId?, Provider, ProviderUrl, PromptModel, PromptTokens?, CompletionTokens?, TotalTokens? |
-
-**Access control applies to both web and Telegram.**  
-Bot owner is always implicitly allowed on web. Owner is auto-added to `BotAccessList(Allowed)` when `EncryptedTelegramBotToken` is first set.
-
-**Stub users**: When a Telegram-only user is approved, a `User` with `IsStubAccount=true` is auto-created (TelegramId as identifier, no email/password).
-
----
-
-## LLM Provider Abstraction
-
-- **Interfaces**: `ILLMChatProvider`, `ILLMEmbeddingProvider`, `ILLMProviderFactory` (in `AChat.Core/LLM/`)
-- **Implementations** (in `AChat.Infrastructure/LLM/`): `OllamaProvider`, `OpenAIProvider`, `GoogleAIStudioProvider`
-- Factory resolves provider from a `LLMProviderPreset`
-- Chat providers expose completion/stream APIs with optional token usage metadata (`PromptTokens`, `CompletionTokens`, `TotalTokens`)
-- Runtime usage is persisted per user in `LLMProviderUsageStats` via `ILLMUsageStatsRecorder`
-
----
-
-## API Surface (`AChat.Api`)
-
-| Area | Endpoints |
-|---|---|
-| Auth | `POST /api/auth/register`, `POST /api/auth/login`, `PUT /api/auth/telegram` |
-| Presets | `GET/POST /api/presets`, `GET/PUT/DELETE /api/presets/{id}` |
-| Bots | `GET/POST /api/bots`, `GET/PUT/DELETE /api/bots/{id}`, `GET /api/bots/{id}/persona-history` |
-| Conversations | `GET/POST /api/bots/{botId}/conversations`, `PUT/DELETE /api/bots/{botId}/conversations/{conversationId}`, `GET /api/bots/{botId}/conversations/{conversationId}/messages` |
-| Access | `GET /api/bots/{id}/access-requests`, `POST .../approve`, `POST .../deny`, `GET/DELETE /api/bots/{id}/access-list` |
-| Chat | SignalR hub `/hubs/chat` — `SendMessage(botId, content, conversationId?)` → streaming `ReceiveToken(chunk)` |
-| Telegram | `POST /api/telegram/webhook/{botId}` — per-bot, validated via secret token header |
-
-All endpoints except register/login require JWT Bearer authentication.
-
----
-
-## Conventions & Rules
-
-### EF Core Migrations
-**NEVER hand-write migration files.** Always use the CLI:
-```powershell
-cd src/backend
-dotnet ef migrations add <MigrationName> --project AChat.Infrastructure/AChat.Infrastructure.csproj --startup-project AChat.Api/AChat.Api.csproj
-dotnet ef database update --project AChat.Infrastructure/AChat.Infrastructure.csproj --startup-project AChat.Api/AChat.Api.csproj
-```
-
-### Security
-- `EncryptedTelegramBotToken` and `EncryptedApiKey` are AES-256 encrypted at rest via `IEncryptionService`
-- Keys must be 32 bytes, Base64-encoded, stored in `Encryption:Key` config (env var in production)
-- API keys/tokens are **never** returned to clients in plaintext after initial save
-- Passwords use PBKDF2-SHA256 with 350,000 iterations and a random 16-byte salt
-- Startup admin behavior: `Admin:Email` + `Admin:Password` seed the first non-stub user if none exists; optional `Admin:ForceUpdateFirstUser=true` force-updates the first non-stub user on startup
-
-### Living Documents
-- **This file (`AGENTS.md`)**: update whenever architecture, models, API, or conventions change
-- **`README.md`**: update whenever setup steps, env vars, Docker config, or major features change
-
-### License
-MIT
-
----
-
-## Frontend (`src/frontend/achat-web`)
-
-- React 19 + TypeScript + Vite
-- Key dependencies: `@microsoft/signalr`, `@tanstack/react-query`, `react-router-dom`
-
-**Planned routes:**
-- `/login`, `/register`
-- `/profile` — link TelegramId
-- `/presets` — CRUD LLM provider presets
-- `/bots` — list + create
-- `/bots/:id/settings` — edit bot (name, age, gender, character, preset, Telegram token)
-- `/bots/:id/chat` — real-time SignalR chat
-- `/bots/:id/persona` — persona snapshot timeline
-- `/bots/:id/access-requests` — approve/deny Telegram access requests
-- `/bots/:id/access-list` — manage whitelist
-
----
-
-## Evolution Engine Thresholds (configurable in `appsettings.json`)
-
-```json
-"Evolution": {
-  "SummarizationThreshold": 50,
-  "SummarizationBatchSize": 30,
-  "PersonaEvolutionMessageInterval": 20,
-  "RecentMessageWindowSize": 20,
-  "RagTopK": 5
+### Logging — LoggerMessage source generation
+All services that log must be `partial` classes using `[LoggerMessage]` attribute on `static partial` methods:
+```csharp
+public partial class MyService(...) : IMyService
+{
+    [LoggerMessage(Level = LogLevel.Information, Message = "Did {Thing}")]
+    private static partial void LogDidThing(ILogger logger, string thing);
 }
 ```
 
----
+### Service Registration
+When a service class needs to be injected both by interface and by concrete type (e.g. for background jobs), register it **once** to avoid double instantiation:
+```csharp
+services.AddScoped<BotService>();
+services.AddScoped<IBotService>(sp => sp.GetRequiredService<BotService>());
+```
+
+### EF Migrations
+**Always** create migrations via the ef CLI tool — never hand-edit migration files:
+```bash
+dotnet ef migrations add <Name> --project src/AChat.Infrastructure --startup-project src/AChat.Api
+```
+
+### Options Pattern
+All configuration sections use `IOptions<T>` with a `Section` constant:
+```csharp
+// In Core/Options/MyOptions.cs
+public class MyOptions { public const string Section = "My"; ... }
+
+// In Program.cs or ServiceExtensions.cs
+services.Configure<MyOptions>(config.GetSection(MyOptions.Section));
+```
+
+### API Token Security
+Preset API tokens are stored in the database but **never returned** in DTOs. The `PresetDto` only exposes `HasApiToken: bool`. The token is write-only (pass a new value to update it, omit to keep existing).
+
+### Pragma Suppressions
+- `#pragma warning disable SKEXP0070` — required for `AddGoogleAIGeminiChatCompletion`
+- `#pragma warning disable SKEXP0001` — required for `OpenAIPromptExecutionSettings.FunctionChoiceBehavior`
+
+## LLM / Semantic Kernel
+
+### Provider mapping in `SemanticKernelFactory`
+| ProviderType | SK connector | Notes |
+|---|---|---|
+| `Ollama` | `AddOpenAIChatCompletion` | Custom `HttpClient` base URL, `apiKey="ollama"` |
+| `OpenAI` | `AddOpenAIChatCompletion` | Standard; base URL optional |
+| `GoogleAI` | `AddGoogleAIGeminiChatCompletion` | Requires SKEXP0070 pragma |
+
+### Memory extraction (BotMemoryPlugin)
+`ChatService.StreamAsync` registers a `BotMemoryPlugin` with `KernelFunction("remember_fact")` on every request. With `FunctionChoiceBehavior.Auto()` the model calls this function to persist facts about the user inline during the response generation.
+
+### Bot personality evolution
+`BotService.RunEvolutionAsync(bot, direction?, ct)` is the core method, called by:
+- `PersonalityEvolutionJob` (background, `direction=null` = organic)
+- `BotService.NudgeEvolutionAsync` (manual trigger, optional direction hint)
+
+## Chat Streaming Protocol (SSE)
+
+`POST /api/conversations/{id}/chat` with `Content-Type: application/json` body `{ "content": "..." }`
+
+Response: `Content-Type: text/event-stream`
+
+```
+data: Hello\n\n
+data:  world\n\n
+data: [DONE]\n\n
+```
+
+Frontend uses the Fetch API with a `ReadableStream` reader (not `EventSource`, since `EventSource` doesn't support POST).
 
 ## Telegram Integration
 
-- Each `Bot` has its own optional Telegram bot token
-- Webhook: `POST /api/telegram/webhook/{botId}` — registered/updated via Telegram `setWebhook` API dynamically when token is saved
-- Inbound webhook requests are globally admission-limited via `Telegram:RateLimiting`
-- Outbound Telegram API calls are rate-limited (global + per-bot) and dispatched via durable DB-backed queue with retry on Telegram `429`
-- **Unknown sender** → reply "I don't know you, go away" + create `BotAccessRequest(Pending)`
-- **Denied sender** → silently drop message, no reply
-- **Approved sender** → route to chat engine; history stored with `Source=Telegram` and scoped by `ConversationId`
-- Commands:
-  - `/new` (also `/newconversation`) → creates and activates a new conversation
-  - `/conversations` (also `/continue`) → shows inline buttons to choose an existing conversation
-- Response style: send `typing...` action while LLM generates, then send complete message
-- Owner receives inline `[Approve] [Deny]` keyboard message on new access requests
+`TelegramHostedService` maintains a dictionary of `(botId → ITelegramBotClient)` and syncs every 30s based on `Bot.TelegramToken`. Unknown users trigger a `BotAccessRequest` and receive `Bot.UnknownUserReply`. Rate limiting is an in-memory sliding window (`TelegramRateLimiter`).
+
+## Frontend
+
+- **API layer**: `src/api/` — one file per domain, all using the Axios instance from `src/api/client.ts`
+- **Auth state**: `src/store/AuthContext.tsx` — JWT stored in `localStorage`
+- **Routing**: react-router-dom v7, protected by `<ProtectedRoute>` (optionally `requireAdmin`)
+- **Data fetching**: `@tanstack/react-query` — invalidate queries after mutations
+- **Build output**: `npm run build` writes to `../src/AChat.Api/wwwroot` (configured in `vite.config.ts`)
+
+## Docker
+
+```
+docker compose up --build   # full stack
+docker compose up db -d     # only database (for local backend dev)
+```
+
+Env overrides use `__` separator (e.g. `Jwt__Secret`, `ConnectionStrings__DefaultConnection`). See `.env.example`.

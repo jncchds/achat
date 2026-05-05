@@ -1,61 +1,42 @@
 services:
   db:
-    image: ankane/pgvector:latest
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: achat
-      POSTGRES_USER: ${POSTGRES_USER:-achat}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_USER: achat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-achat}
     volumes:
       - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-achat} -d achat"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U achat -d achat"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
-  api:
-    build:
-      context: .
-      dockerfile: src/backend/AChat.Api/Dockerfile
-    environment:
-      ASPNETCORE_ENVIRONMENT: Production
-      Logging__LogLevel__Default: ${LOG_LEVEL:-Information}
-      Logging__LogLevel__Microsoft__AspNetCore: ${MICROSOFT_ASPNETCORE_LOG_LEVEL:-Warning}
-      Logging__LogLevel__Microsoft__EntityFrameworkCore: ${EF_LOG_LEVEL:-Warning}
-      Logging__LogLevel__Microsoft__EntityFrameworkCore__Database__Command: ${EF_DB_COMMAND_LOG_LEVEL:-Warning}
-      ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=achat;Username=${POSTGRES_USER:-achat};Password=${POSTGRES_PASSWORD}"
-      Jwt__Secret: ${JWT_SECRET:?JWT_SECRET is required}
-      Jwt__Issuer: ${JWT_ISSUER:-achat}
-      Jwt__Audience: ${JWT_AUDIENCE:-achat}
-      Jwt__ExpiresInMinutes: ${JWT_EXPIRES_IN_MINUTES:-60}
-      Encryption__Key: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
-      Telegram__WebhookBaseUrl: ${TELEGRAM_WEBHOOK_BASE_URL:?TELEGRAM_WEBHOOK_BASE_URL is required}
-      Telegram__RateLimiting__Enabled: ${TELEGRAM_RATE_LIMIT_ENABLED:-true}
-      Telegram__RateLimiting__GlobalInboundPerSecond: ${TELEGRAM_RATE_LIMIT_GLOBAL_INBOUND_PER_SECOND:-60}
-      Telegram__RateLimiting__GlobalInboundBurst: ${TELEGRAM_RATE_LIMIT_GLOBAL_INBOUND_BURST:-120}
-      Telegram__RateLimiting__GlobalOutboundPerSecond: ${TELEGRAM_RATE_LIMIT_GLOBAL_OUTBOUND_PER_SECOND:-30}
-      Telegram__RateLimiting__GlobalOutboundBurst: ${TELEGRAM_RATE_LIMIT_GLOBAL_OUTBOUND_BURST:-60}
-      Telegram__RateLimiting__PerBotOutboundPerSecond: ${TELEGRAM_RATE_LIMIT_PER_BOT_OUTBOUND_PER_SECOND:-20}
-      Telegram__RateLimiting__PerBotOutboundBurst: ${TELEGRAM_RATE_LIMIT_PER_BOT_OUTBOUND_BURST:-30}
-      Telegram__RateLimiting__QueueCapacity: ${TELEGRAM_RATE_LIMIT_QUEUE_CAPACITY:-5000}
-      Telegram__RateLimiting__DispatcherIdleDelayMs: ${TELEGRAM_RATE_LIMIT_DISPATCHER_IDLE_DELAY_MS:-25}
-      Telegram__RateLimiting__MaxRetryAttempts: ${TELEGRAM_RATE_LIMIT_MAX_RETRY_ATTEMPTS:-5}
-      Telegram__RateLimiting__DefaultRetryAfterSeconds: ${TELEGRAM_RATE_LIMIT_DEFAULT_RETRY_AFTER_SECONDS:-2}
-      Evolution__SummarizationThreshold: ${SUMMARIZATION_THRESHOLD:-50}
-      Evolution__SummarizationBatchSize: ${SUMMARIZATION_BATCH_SIZE:-30}
-      Evolution__PersonaEvolutionMessageInterval: ${PERSONA_EVOLUTION_MESSAGE_INTERVAL:-20}
-      Evolution__RecentMessageWindowSize: ${RECENT_MESSAGE_WINDOW_SIZE:-20}
-      Evolution__RagTopK: ${RAG_TOP_K:-5}
-      Admin__Email: ${ADMIN_EMAIL:?ADMIN_EMAIL is required}
-      Admin__Password: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
-      Admin__ForceUpdateFirstUser: ${ADMIN_FORCE_UPDATE_FIRST_USER:-false}
+  app:
+    build: .
+    ports:
+      - "8080:8080"
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - "8080:8080"
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=achat;Username=achat;Password=${POSTGRES_PASSWORD:-achat}"
+      Jwt__Secret: ${JWT_SECRET:-CHANGE_ME_TO_A_SECURE_32_CHAR_SECRET_KEY}
+      Jwt__Issuer: AChat
+      Jwt__Audience: AChat
+      Jwt__ExpiryHours: 24
+      InitialUser__Username: ${INITIAL_USER:-admin}
+      InitialUser__Password: ${INITIAL_PASSWORD:-changeme}
+      BotEvolution__IntervalHours: 24
+      BotEvolution__MinOwnerMessagesRequired: 10
+      BotEvolution__MaxMessagesContext: 50
+      Telegram__GlobalRateLimitPerMinute: 100
+      Telegram__PerBotRateLimitPerMinute: 20
+      Telegram__DefaultUnknownUserReply: "I don't know you, go away"
 
 volumes:
   pgdata:

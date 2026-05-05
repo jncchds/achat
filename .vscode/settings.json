@@ -1,7 +1,11 @@
 {
-    "chat.tools.terminal.autoApprove": {
-        "mkdir": true,
-        "npm run build": true,
-        "git add": true
-    }
+  "github.copilot.chat.codeGeneration.instructions": [
+    { "file": ".github/copilot/project-notes.md" }
+  ],
+  "github.copilot.chat.testGeneration.instructions": [
+    { "file": ".github/copilot/project-notes.md" }
+  ],
+  "github.copilot.chat.reviewSelection.instructions": [
+    { "file": ".github/copilot/project-notes.md" }
+  ]
 }

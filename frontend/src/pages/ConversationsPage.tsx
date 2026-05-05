@@ -27,7 +27,7 @@ export default function ConversationsPage() {
   });
 
   return (
-    <Box sx={{ p: 3, maxWidth: 600 }}>
+    <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h5" sx={{ fontWeight: 700 }}>Conversations</Typography>
         <Button variant="contained" startIcon={<AddIcon />} onClick={() => createMut.mutate()} disabled={createMut.isPending}>

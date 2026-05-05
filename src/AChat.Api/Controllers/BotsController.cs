@@ -76,6 +76,10 @@ public class BotsController(IBotService botService) : ControllerBase
         return result is null ? NotFound() : Ok(result);
     }
 
+    [HttpGet("{id:guid}/evolution-history")]
+    public async Task<IActionResult> GetEvolutionHistory(Guid id, CancellationToken ct) =>
+        Ok(await botService.GetEvolutionHistoryAsync(id, GetUserId(), ct));
+
     private Guid GetUserId() =>
         Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 }

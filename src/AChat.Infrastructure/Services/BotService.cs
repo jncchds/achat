@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AChat.Core.DTOs.Bots;
 using AChat.Core.Entities;
 using AChat.Core.Enums;
@@ -147,9 +148,14 @@ public partial class BotService(
             You have the following personality:
             {bot.Personality}
 
-            Review these recent messages from your owner and propose a subtly evolved version of your personality 
+            Review these recent messages from your owner and propose a subtly evolved version of your personality
             that feels natural and continuous — no dramatic shifts, just organic growth.{directionHint}
-            Return only the updated personality text, nothing else.
+
+            Respond with a JSON object containing exactly two fields:
+            - "reasoning": 1-3 sentences explaining what changed and why
+            - "personality": the full updated personality text
+
+            Return only the JSON object, nothing else.
 
             Owner messages:
             {messageContext}
@@ -162,10 +168,26 @@ public partial class BotService(
             var history = new ChatHistory();
             history.AddUserMessage(prompt);
             var result = await chatService.GetChatMessageContentAsync(history, cancellationToken: ct);
-            var newPersonality = result.Content?.Trim();
+            var raw = result.Content?.Trim();
+
+            if (string.IsNullOrWhiteSpace(raw)) return;
+
+            var (newPersonality, reasoning) = ParseEvolutionResponse(raw);
 
             if (!string.IsNullOrWhiteSpace(newPersonality))
             {
+                var log = new BotEvolutionLog
+                {
+                    Id = Guid.NewGuid(),
+                    BotId = bot.Id,
+                    OldPersonality = bot.Personality,
+                    NewPersonality = newPersonality,
+                    Reasoning = reasoning,
+                    Direction = string.IsNullOrWhiteSpace(direction) ? null : direction,
+                    EvolvedAt = DateTime.UtcNow,
+                };
+                db.BotEvolutionLogs.Add(log);
+
                 bot.Personality = newPersonality;
                 bot.LastEvolvedAt = DateTime.UtcNow;
                 bot.UpdatedAt = DateTime.UtcNow;
@@ -177,6 +199,45 @@ public partial class BotService(
         {
             LogEvolutionError(logger, bot.Id, ex);
         }
+    }
+
+    private static (string personality, string reasoning) ParseEvolutionResponse(string raw)
+    {
+        // Strip markdown code fences if present
+        var json = raw;
+        if (json.StartsWith("```"))
+        {
+            var start = json.IndexOf('\n') + 1;
+            var end = json.LastIndexOf("```");
+            if (end > start) json = json[start..end].Trim();
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var personality = root.TryGetProperty("personality", out var p) ? p.GetString()?.Trim() ?? "" : "";
+            var reasoning = root.TryGetProperty("reasoning", out var r) ? r.GetString()?.Trim() ?? "" : "";
+            return (personality, reasoning);
+        }
+        catch
+        {
+            // Fallback: treat entire response as new personality with no reasoning
+            return (raw, "");
+        }
+    }
+
+    public async Task<IReadOnlyList<BotEvolutionLogDto>> GetEvolutionHistoryAsync(Guid botId, Guid userId, CancellationToken ct = default)
+    {
+        var isOwner = await db.Bots.AnyAsync(b => b.Id == botId && b.OwnerId == userId, ct);
+        if (!isOwner) return [];
+
+        return await db.BotEvolutionLogs
+            .AsNoTracking()
+            .Where(l => l.BotId == botId)
+            .OrderByDescending(l => l.EvolvedAt)
+            .Select(l => new BotEvolutionLogDto(l.Id, l.OldPersonality, l.NewPersonality, l.Reasoning, l.Direction, l.EvolvedAt))
+            .ToListAsync(ct);
     }
 
     public async Task<IReadOnlyList<BotAccessRequestDto>> GetAccessRequestsAsync(Guid botId, Guid ownerId, CancellationToken ct = default)

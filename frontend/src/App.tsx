@@ -8,6 +8,7 @@ import { NavBar } from './components/NavBar';
 import LoginPage from './pages/LoginPage';
 import BotsPage from './pages/BotsPage';
 import BotSettingsPage from './pages/BotSettingsPage';
+import BotEvolutionPage from './pages/BotEvolutionPage';
 import BotAccessPage from './pages/BotAccessPage';
 import BotChatLayout from './pages/BotChatLayout';
 import ChatPage from './pages/ChatPage';
@@ -28,6 +29,7 @@ function AppLayout() {
         <Routes>
           <Route path="/bots" element={<BotsPage />} />
           <Route path="/bots/:botId/settings" element={<BotSettingsPage />} />
+          <Route path="/bots/:botId/evolution" element={<BotEvolutionPage />} />
           <Route path="/bots/:botId/access" element={<BotAccessPage />} />
           <Route path="/bots/:botId/chat" element={<BotChatLayout />}>
             <Route path=":conversationId" element={<ChatPage />} />

@@ -22,4 +22,5 @@ public class Bot
     public ICollection<BotAccessRequest> AccessRequests { get; set; } = [];
     public ICollection<BotUserMemory> UserMemories { get; set; } = [];
     public ICollection<LlmInteraction> LlmInteractions { get; set; } = [];
+    public ICollection<BotEvolutionLog> EvolutionLogs { get; set; } = [];
 }

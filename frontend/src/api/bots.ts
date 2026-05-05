@@ -14,6 +14,14 @@ export interface UpdateBotRequest {
 export interface BotAccessRequestDto {
   id: string; botId: string; requesterId: string; requesterUsername: string; status: string; createdAt: string;
 }
+export interface BotEvolutionLogDto {
+  id: string;
+  oldPersonality: string;
+  newPersonality: string;
+  reasoning: string;
+  direction: string | null;
+  evolvedAt: string;
+}
 
 export const botsApi = {
   getAll: () => api.get<BotDto[]>('/bots').then(r => r.data),
@@ -27,4 +35,5 @@ export const botsApi = {
   respondToAccessRequest: (botId: string, requestId: string, approve: boolean) =>
     api.put(`/bots/${botId}/access-requests/${requestId}`, { approve }),
   requestAccess: (id: string) => api.post<BotAccessRequestDto>(`/bots/${id}/request-access`).then(r => r.data),
+  getEvolutionHistory: (id: string) => api.get<BotEvolutionLogDto[]>(`/bots/${id}/evolution-history`).then(r => r.data),
 };

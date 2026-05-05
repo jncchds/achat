@@ -41,3 +41,11 @@ public record BotAccessRequestDto(
     DateTime CreatedAt);
 
 public record RespondToAccessRequest(bool Approve);
+
+public record BotEvolutionLogDto(
+    Guid Id,
+    string OldPersonality,
+    string NewPersonality,
+    string Reasoning,
+    string? Direction,
+    DateTime EvolvedAt);

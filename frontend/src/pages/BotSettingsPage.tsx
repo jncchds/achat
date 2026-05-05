@@ -50,7 +50,7 @@ export default function BotSettingsPage() {
   if (!bot) return <Typography sx={{ p: 3 }}>Loading…</Typography>;
 
   return (
-    <Box sx={{ p: 3, maxWidth: 700 }}>
+    <Box sx={{ p: 3 }}>
       <Button onClick={() => navigate(-1)} sx={{ mb: 2 }}>← Back</Button>
       <Typography variant="h5" sx={{ fontWeight: 700, mb: 3 }}>Bot Settings: {bot.name}</Typography>
 
@@ -123,7 +123,10 @@ export default function BotSettingsPage() {
         <Typography variant="h6" sx={{ mb: 2 }}>Personality Evolution</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Last evolved: {bot.lastEvolvedAt ? new Date(bot.lastEvolvedAt).toLocaleString() : 'Never'}</Typography>
         <TextField label="Nudge Direction (optional, e.g. 'be more friendly')" value={nudgeDir} onChange={e => setNudgeDir(e.target.value)} fullWidth sx={{ mb: 2 }} />
-        <Button variant="outlined" onClick={() => nudgeMut.mutate()} disabled={nudgeMut.isPending}>Trigger Evolution Now</Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="outlined" onClick={() => nudgeMut.mutate()} disabled={nudgeMut.isPending}>Trigger Evolution Now</Button>
+          <Button variant="text" onClick={() => navigate(`/bots/${botId}/evolution`)}>View Evolution History</Button>
+        </Box>
       </Paper>
     </Box>
   );

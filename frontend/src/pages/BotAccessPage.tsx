@@ -33,7 +33,7 @@ export default function BotAccessPage() {
   };
 
   return (
-    <Box sx={{ p: 3, maxWidth: 700 }}>
+    <Box sx={{ p: 3 }}>
       <Button onClick={() => navigate(-1)} sx={{ mb: 2 }}>← Back</Button>
       <Typography variant="h5" sx={{ fontWeight: 700, mb: 3 }}>Access Requests</Typography>
 

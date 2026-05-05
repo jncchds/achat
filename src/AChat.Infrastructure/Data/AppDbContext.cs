@@ -13,6 +13,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<LlmInteraction> LlmInteractions => Set<LlmInteraction>();
+    public DbSet<BotEvolutionLog> BotEvolutionLogs => Set<BotEvolutionLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

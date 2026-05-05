@@ -15,4 +15,5 @@ public interface IBotService
     Task<bool> RespondToAccessRequestAsync(Guid botId, Guid requestId, Guid ownerId, bool approve, CancellationToken ct = default);
     Task<BotAccessRequestDto?> RequestAccessAsync(Guid botId, Guid requesterId, CancellationToken ct = default);
     Task<bool> HasAccessAsync(Guid botId, Guid userId, CancellationToken ct = default);
+    Task<IReadOnlyList<BotEvolutionLogDto>> GetEvolutionHistoryAsync(Guid botId, Guid userId, CancellationToken ct = default);
 }

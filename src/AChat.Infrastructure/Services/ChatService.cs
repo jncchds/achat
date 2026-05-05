@@ -5,19 +5,26 @@ using AChat.Core.DTOs.Conversations;
 using AChat.Core.Entities;
 using AChat.Core.Enums;
 using AChat.Core.Interfaces.Services;
+using AChat.Core.Options;
 using AChat.Infrastructure.Data;
 using AChat.Infrastructure.LLM;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
+using Pgvector;
+using Pgvector.EntityFrameworkCore;
+using ChatOptions = AChat.Core.Options.ChatOptions;
 
 namespace AChat.Infrastructure.Services;
 
 public partial class ChatService(
     AppDbContext db,
     IConversationNotifier notifier,
+    IOptions<ChatOptions> chatOptions,
     ILogger<ChatService> logger) : IChatService
 {
     public async IAsyncEnumerable<string> StreamAsync(
@@ -28,7 +35,6 @@ public partial class ChatService(
     {
         var conv = await db.Conversations
             .Include(c => c.Bot).ThenInclude(b => b.Preset)
-            .Include(c => c.Messages.OrderBy(m => m.CreatedAt))
             .FirstOrDefaultAsync(c => c.Id == conversationId && c.UserId == userId, ct);
 
         if (conv is null)
@@ -44,7 +50,55 @@ public partial class ChatService(
         var memory = await db.BotUserMemories
             .FirstOrDefaultAsync(m => m.BotId == bot.Id && m.UserId == userId, ct);
 
-        var chatHistory = BuildChatHistory(bot, memory, conv.Messages, userMessage);
+        var contextWindow = chatOptions.Value.ContextWindowMessages;
+        var recentMessages = await db.Messages
+            .Where(m => m.ConversationId == conversationId)
+            .OrderByDescending(m => m.CreatedAt)
+            .Take(contextWindow)
+            .OrderBy(m => m.CreatedAt)
+            .ToListAsync(ct);
+
+        // Semantic retrieval: surface relevant older messages outside the context window
+        IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator = null;
+        Vector? userEmbeddingVector = null;
+        List<Message> semanticMessages = [];
+        if (!string.IsNullOrEmpty(preset.EmbeddingModel))
+        {
+            try
+            {
+                var embKernel = SemanticKernelFactory.BuildWithEmbedding(preset);
+                embeddingGenerator = embKernel
+                    .GetRequiredService<IEmbeddingGenerator<string, Embedding<float>>>();
+
+                var embResult = await embeddingGenerator
+                    .GenerateAsync([userMessage], cancellationToken: ct);
+                userEmbeddingVector = new Vector(embResult[0].Vector.ToArray());
+
+                var recentIds = recentMessages.Select(m => m.Id).ToHashSet();
+                var topIds = await db.Messages
+                    .Where(m => m.ConversationId == conversationId
+                             && !recentIds.Contains(m.Id)
+                             && m.Embedding != null)
+                    .OrderBy(m => m.Embedding!.CosineDistance(userEmbeddingVector))
+                    .Take(chatOptions.Value.SemanticContextMessages)
+                    .Select(m => m.Id)
+                    .ToListAsync(ct);
+
+                if (topIds.Count > 0)
+                {
+                    semanticMessages = await db.Messages
+                        .Where(m => topIds.Contains(m.Id))
+                        .OrderBy(m => m.CreatedAt)
+                        .ToListAsync(ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogEmbeddingError(logger, ex);
+            }
+        }
+
+        var chatHistory = BuildChatHistory(bot, memory, semanticMessages, recentMessages, userMessage);
 
         // Persist user message
         var userMsg = new Message
@@ -118,6 +172,22 @@ public partial class ChatService(
                 };
                 db.Messages.Add(assistantMsg);
 
+                // Store embeddings for future semantic retrieval
+                if (embeddingGenerator is not null && userEmbeddingVector is not null)
+                {
+                    try
+                    {
+                        userMsg.Embedding = userEmbeddingVector;
+                        var assistantEmbResult = await embeddingGenerator
+                            .GenerateAsync([assistantMsg.Content], cancellationToken: CancellationToken.None);
+                        assistantMsg.Embedding = new Vector(assistantEmbResult[0].Vector.ToArray());
+                    }
+                    catch (Exception ex)
+                    {
+                        LogEmbeddingError(logger, ex);
+                    }
+                }
+
                 var interaction = new LlmInteraction
                 {
                     BotId = bot.Id,
@@ -180,7 +250,8 @@ public partial class ChatService(
     private static ChatHistory BuildChatHistory(
         Bot bot,
         BotUserMemory? memory,
-        IEnumerable<Message> history,
+        IReadOnlyList<Message> semanticContext,
+        IEnumerable<Message> recentHistory,
         string newUserMessage)
     {
         var chatHistory = new ChatHistory();
@@ -192,7 +263,14 @@ public partial class ChatService(
             chatHistory.AddSystemMessage($"What you remember about this user:\n- {factsText}");
         }
 
-        foreach (var msg in history)
+        if (semanticContext.Count > 0)
+        {
+            var lines = semanticContext.Select(m => $"[{m.Role}]: {m.Content}");
+            chatHistory.AddSystemMessage(
+                $"Relevant earlier context from this conversation:\n{string.Join("\n", lines)}");
+        }
+
+        foreach (var msg in recentHistory)
         {
             if (msg.Role == MessageRole.User) chatHistory.AddUserMessage(msg.Content);
             else if (msg.Role == MessageRole.Assistant) chatHistory.AddAssistantMessage(msg.Content);
@@ -204,6 +282,9 @@ public partial class ChatService(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Conversation {ConversationId} not found")]
     private static partial void LogConversationNotFound(ILogger logger, Guid conversationId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Embedding generation failed")]
+    private static partial void LogEmbeddingError(ILogger logger, Exception ex);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Chat completed for conversation {ConversationId}. Tokens: in={InputTokens} out={OutputTokens}")]
     private static partial void LogChatCompleted(ILogger logger, Guid conversationId, int inputTokens, int outputTokens);

@@ -19,6 +19,8 @@ public class MessageConfiguration : IEntityTypeConfiguration<Message>
             .HasForeignKey(m => m.ConversationId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        builder.Property(m => m.Embedding).HasColumnType("vector(1536)");
+
         builder.HasIndex(m => new { m.ConversationId, m.CreatedAt });
     }
 }

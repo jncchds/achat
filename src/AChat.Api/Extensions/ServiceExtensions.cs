@@ -29,6 +29,8 @@ public static class ServiceExtensions
         services.AddScoped<IModelListService, ModelListService>();
         services.AddSingleton<IConversationNotifier, ConversationNotifier>();
 
+        services.Configure<ChatOptions>(configuration.GetSection(ChatOptions.Section));
+
         var telegramOptions = configuration.GetSection(TelegramOptions.Section).Get<TelegramOptions>() ?? new();
         services.AddSingleton(new TelegramRateLimiter(
             telegramOptions.GlobalRateLimitPerMinute,

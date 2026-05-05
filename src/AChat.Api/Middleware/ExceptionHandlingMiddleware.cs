@@ -14,10 +14,15 @@ public partial class ExceptionHandlingMiddleware(
         {
             await next(context);
         }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            // Client disconnected — normal for SSE/streaming endpoints, nothing to do.
+        }
         catch (Exception ex)
         {
             LogUnhandledException(logger, context.Request.Path, ex);
-            await WriteErrorResponseAsync(context, ex);
+            if (!context.Response.HasStarted)
+                await WriteErrorResponseAsync(context, ex);
         }
     }
 

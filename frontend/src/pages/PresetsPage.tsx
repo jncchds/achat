@@ -130,8 +130,7 @@ export default function PresetsPage() {
             value={form.timeoutSeconds}
             onChange={e => setForm({ ...form, timeoutSeconds: e.target.value.replace(/[^0-9]/g, '') })}
             fullWidth
-            type="number"
-            inputProps={{ min: 1 }}
+            slotProps={{ htmlInput: { inputMode: 'numeric', pattern: '[0-9]*', min: 1 } }}
             helperText="Leave blank to use the default HTTP timeout"
           />
         </DialogContent>

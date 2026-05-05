@@ -72,13 +72,15 @@ public partial class ChatService(
 
                 var embResult = await embeddingGenerator
                     .GenerateAsync([userMessage], cancellationToken: ct);
+                var actualDim = embResult[0].Vector.Length;
                 userEmbeddingVector = new Vector(embResult[0].Vector.ToArray());
 
                 var recentIds = recentMessages.Select(m => m.Id).ToHashSet();
                 var topIds = await db.Messages
                     .Where(m => m.ConversationId == conversationId
                              && !recentIds.Contains(m.Id)
-                             && m.Embedding != null)
+                             && m.Embedding != null
+                             && m.EmbeddingDimension == actualDim)
                     .OrderBy(m => m.Embedding!.CosineDistance(userEmbeddingVector))
                     .Take(chatOptions.Value.SemanticContextMessages)
                     .Select(m => m.Id)
@@ -177,10 +179,13 @@ public partial class ChatService(
                 {
                     try
                     {
+                        var dim = userEmbeddingVector.ToArray().Length;
                         userMsg.Embedding = userEmbeddingVector;
+                        userMsg.EmbeddingDimension = dim;
                         var assistantEmbResult = await embeddingGenerator
                             .GenerateAsync([assistantMsg.Content], cancellationToken: CancellationToken.None);
                         assistantMsg.Embedding = new Vector(assistantEmbResult[0].Vector.ToArray());
+                        assistantMsg.EmbeddingDimension = dim;
                     }
                     catch (Exception ex)
                     {

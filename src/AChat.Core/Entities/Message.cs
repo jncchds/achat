@@ -11,6 +11,7 @@ public class Message
     public string Content { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
     public Vector? Embedding { get; set; }
+    public int? EmbeddingDimension { get; set; }
 
     public Conversation Conversation { get; set; } = null!;
 }

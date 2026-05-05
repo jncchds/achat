@@ -19,7 +19,10 @@ public class MessageConfiguration : IEntityTypeConfiguration<Message>
             .HasForeignKey(m => m.ConversationId)
             .OnDelete(DeleteBehavior.Cascade);
 
-        builder.Property(m => m.Embedding).HasColumnType("vector(1536)");
+        // Dimensionless vector column: supports any embedding model regardless of output dimension.
+        // EmbeddingDimension column records the actual dimension so cosine distance queries
+        // can filter to matching-dimension vectors and avoid cross-dimension comparison errors.
+        builder.Property(m => m.Embedding).HasColumnType("vector");
 
         builder.HasIndex(m => new { m.ConversationId, m.CreatedAt });
     }

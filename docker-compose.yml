@@ -1,0 +1,42 @@
+services:
+  achat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5001:8080"  # 5000 is taken by the abook stack on this machine
+    environment:
+      - ACHAT_ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=achat;Username=achat;Password=achat
+      # ── Bootstrap admin (§7.2) — override for your instance ─────────────────
+      - ACHAT_BootstrapAdmin__LoginName=admin
+      - ACHAT_BootstrapAdmin__Password=admin
+      - ACHAT_BootstrapAdmin__ForceSetPassword=true
+      # ── JWT (§7.1) — set a long random string for real deployments ─────────
+      - ACHAT_Jwt__SigningKey=achat-dev-signing-key-change-me-in-production-0123456789
+      - ACHAT_Jwt__ExpiryHours=168
+      - ASPNETCORE_ENVIRONMENT=Production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Lets a preset reach an LLM running on the host (Ollama etc.)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: achat
+      POSTGRES_USER: achat
+      POSTGRES_PASSWORD: achat
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U achat -d achat"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

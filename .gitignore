@@ -1,0 +1,15 @@
+bin/
+obj/
+*.user
+.vs/
+.idea/
+*.swp
+
+# UI
+node_modules/
+dist/
+wwwroot/
+*.local
+
+# local config
+appsettings.Local.json

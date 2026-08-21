@@ -1,0 +1,18 @@
+# Build outputs
+**/bin/
+**/obj/
+**/node_modules/
+src/AChat.Api/wwwroot/
+src/achat-ui/dist/
+
+# .NET artifacts
+.vs/
+*.user
+*.suo
+
+# Logs
+*.log
+
+# VCS + docs
+.git/
+docs/

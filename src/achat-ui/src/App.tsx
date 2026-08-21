@@ -1,0 +1,40 @@
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import AppLayout from './layouts/AppLayout'
+import Login from './pages/Login'
+import Bots from './pages/Bots'
+import Chat from './pages/Chat'
+import Presets from './pages/Presets'
+import Admin from './pages/Admin'
+import Interactions from './pages/Interactions'
+import { AuthProvider, useAuth } from './hooks/useAuth'
+
+function Protected() {
+  const { user, loading } = useAuth()
+  if (loading) return <div className="app-layout"><main className="app-main"><p className="hint">Loading…</p></main></div>
+  if (!user) return <Navigate to="/login" replace />
+  return (
+    <Routes>
+      <Route element={<AppLayout />}>
+        <Route path="/bots" element={<Bots />} />
+        <Route path="/bots/:botId" element={<Chat />} />
+        <Route path="/presets" element={<Presets />} />
+        <Route path="/admin" element={<Admin />} />
+        <Route path="/admin/interactions" element={<Interactions />} />
+        <Route path="*" element={<Navigate to="/bots" replace />} />
+      </Route>
+    </Routes>
+  )
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/*" element={<Protected />} />
+        </Routes>
+      </AuthProvider>
+    </BrowserRouter>
+  )
+}

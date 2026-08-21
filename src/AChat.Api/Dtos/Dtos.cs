@@ -3,8 +3,14 @@ using AChat.Core.Models;
 namespace AChat.Api.Dtos;
 
 // ── Auth ────────────────────────────────────────────────────────────────────────
-public sealed record LoginRequest(string Username, string Password);
+/// <summary>
+/// <see cref="Timezone"/> is the IANA zone of the device (e.g. "Europe/Moscow"),
+/// captured from the browser and stored on the user (§5.9). Invalid values are
+/// ignored; the user can set it explicitly later.
+/// </summary>
+public sealed record LoginRequest(string Username, string Password, string? Timezone = null);
 public sealed record LoginResponse(string Token, UserDto User);
+public sealed record TimezoneRequest(string? Timezone);
 public sealed record UserDto
 {
     public int Id { get; init; }

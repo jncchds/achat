@@ -7,33 +7,6 @@ using Microsoft.EntityFrameworkCore;
 namespace AChat.Api.Services;
 
 /// <summary>
-/// The persona block of every prompt (§2.4, §5.5). Phase 1 carries the core layer
-/// only; directives and evolved traits join in Phase 5, in the fixed order
-/// core → evolved → directives (directives last so they win ties).
-/// </summary>
-public static class PromptAssembly
-{
-    public static string BuildPersonaBlock(Bot bot)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.Append("You are ").Append(bot.Name)
-          .Append(", a real, persistent friend in the user's life. ")
-          .Append("You remember them, you have a continuous relationship, and you speak " +
-                  "as yourself — never as an assistant, model, or program.\n\n");
-
-        if (!string.IsNullOrWhiteSpace(bot.CorePersona))
-        {
-            sb.Append("Who you are:\n").Append(bot.CorePersona.Trim()).Append('\n');
-        }
-        if (!string.IsNullOrWhiteSpace(bot.SpeechStyle))
-        {
-            sb.Append('\n').Append("How you speak:\n").Append(bot.SpeechStyle.Trim());
-        }
-        return sb.ToString();
-    }
-}
-
-/// <summary>
 /// One turn of conversation: persist the user's message, assemble the prompt, stream
 /// the reply, persist it, and log the interaction (§4.4). All provider errors are
 /// captured — the log is the debugging surface.
@@ -43,7 +16,10 @@ public sealed class ChatService
     private readonly AppDbContext _db;
     private readonly ILlmProviderFactory _factory;
     private readonly IApiKeyProtector _keys;
+    private readonly IConfiguration _config;
     private readonly int _historyTurns;
+    private readonly TimeSpan _gapThreshold;
+    private readonly PromptBudget _budget;
 
     public sealed record ChatRunResult(
         int UserMessageId,
@@ -61,7 +37,10 @@ public sealed class ChatService
         _db = db;
         _factory = factory;
         _keys = keys;
+        _config = config;
         _historyTurns = config.GetValue("Chat:HistoryTurns", 20);
+        _gapThreshold = TimeSpan.FromMinutes(config.GetValue("Chat:GapThresholdMinutes", 360));
+        _budget = PromptBudget.FromConfiguration(config);
     }
 
     public async Task<ChatRunResult> RunAsync(
@@ -111,20 +90,43 @@ public sealed class ChatService
         // The user's turn is on the record — the client can now show the run as started.
         if (onStart is not null) await onStart(userMessage.Id);
 
-        // ── Prompt: persona + recent-history window (Phase 1 scope) ─────────────
-        var history = await _db.Messages
+        // ── Prompt assembly (§5.5, §5.9) ─────────────────────────────────────────
+        // System block: persona → current time in the user's zone → rolling summary.
+        var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId);
+        var summary = await _db.ConversationSummaries.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.BotId == bot.Id && s.UserId == userId);
+
+        var now = DateTime.UtcNow;
+        var systemBlock = PromptAssembly.BuildSystemBlock(bot, user?.Timezone, now, summary, _budget);
+
+        // Recent history: last N turns verbatim, with gap markers where the silence
+        // was long enough to be noticed (§5.9.2).
+        var historyRaw = await _db.Messages
+            .AsNoTracking()
             .Where(m => m.ConversationId == conversation.Id && m.Id < userMessage.Id)
             .OrderByDescending(m => m.Id)
             .Take(_historyTurns)
             .ToListAsync();
-        history.Reverse();
+        historyRaw.Reverse();
+
+        var history = PromptAssembly.BuildHistoryMessages(historyRaw, _gapThreshold);
+
+        // Budget: history drops oldest first (§5.5).
+        history = DropOldestOverBudget(history, _budget.HistoryTokens);
 
         var requestMessages = new List<LlmChatMessage>
         {
-            new(MessageRole.System, PromptAssembly.BuildPersonaBlock(bot)),
+            new(MessageRole.System, systemBlock),
         };
-        requestMessages.AddRange(history.Select(m => new LlmChatMessage(m.Role, m.Content)));
-        requestMessages.Add(new LlmChatMessage(MessageRole.User, content));
+        requestMessages.AddRange(history);
+
+        // The user came back after a long absence — the gap between the window's end
+        // and this new message gets a marker, prefixed to the new message (§5.9.2).
+        var returnGap = historyRaw.Count > 0
+            ? PromptAssembly.FormatReturnGap(historyRaw[^1].CreatedAt, now, _gapThreshold)
+            : null;
+        requestMessages.Add(new LlmChatMessage(MessageRole.User,
+            (returnGap is null ? "" : returnGap + "\n") + content));
 
         // ── Provider ─────────────────────────────────────────────────────────────
         if (!_factory.IsSupported(preset.Provider))
@@ -288,6 +290,22 @@ public sealed class ChatService
             promptTokens,
             completionTokens,
             totalTokens);
+    }
+
+    /// <summary>History budget: keep the newest messages, drop oldest first (§5.5).</summary>
+    private static List<LlmChatMessage> DropOldestOverBudget(List<LlmChatMessage> history, int maxTokens)
+    {
+        if (maxTokens <= 0) return history;
+        var used = 0;
+        var kept = new List<LlmChatMessage>();
+        for (var i = history.Count - 1; i >= 0; i--)
+        {
+            var tokens = PromptAssembly.EstimateTokens(history[i].Content);
+            if (used + tokens > maxTokens && kept.Count > 0) break;
+            used += tokens;
+            kept.Insert(0, history[i]);
+        }
+        return kept;
     }
 
     private static string Truncate(string? s, int max) =>

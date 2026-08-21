@@ -36,6 +36,12 @@ with the `ACHAT_` prefix and .NET nested-key convention (`ACHAT_Section__Key`):
 | `Jwt__SigningKey` | dev value — **change it** | HMAC-SHA256 signing key for tokens (§7.1) |
 | `Jwt__ExpiryHours` | `168` | Token lifetime |
 | `Chat__HistoryTurns` | `20` | Recent-history window (messages) in the prompt |
+| `Chat__GapThresholdMinutes` | `360` | Silence above this gets a gap marker in the prompt (§5.9) |
+| `Chat__AssumedContextTokens` | `32000` | Assumed context window for prompt budgeting (§5.5) |
+| `Chat__BudgetPersonaPercent` / `BudgetSummaryPercent` / `BudgetHistoryPercent` | `10 / 10 / 50` | Budget shares (memories 15% arrive in Phase 4) |
+| `Chat__SummaryTailTokens` | `800` | Un-summarised tail that triggers a summary rewrite (§5.3) |
+| `Chat__SummaryMaxTokens` | `1024` | Output cap for the summary call (covers reasoning-model thinking) |
+| `Chat__SummaryTemperature` | `0.3` | Sampling temperature for the summary call |
 
 ## Development workflow
 
@@ -86,5 +92,10 @@ src/
   preset CRUD with encrypted keys, load models / test connection, bot creation with
   core persona, one continuous conversation per (bot, user), SignalR streaming with
   stop, every LLM call logged (§4.4)
-- **Phase 2 — Interaction log viewer** — API exists; UI next
-- Phases 3–8: see the delivery plan in `docs/design.md` §12a
+- **Phase 2 — Interaction log viewer** ✅ filterable list + full request/reasoning/
+  response detail
+- **Phase 3 — Continuity without embeddings** ✅ user timezone (browser capture +
+  manual override), rolling summary worker (utility model, watermark, logged),
+  token-budgeted prompt assembly, gap markers — verified: a bot recalls facts planted
+  outside its recent window and reacts to a multi-hour silence
+- Phases 4–8: see the delivery plan in `docs/design.md` §12a

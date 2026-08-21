@@ -1013,3 +1013,10 @@ pre.code { background: var(--input-bg); border: 1px solid var(--border); border-
 
 /* NavLink wrapper inside sidebar */
 .nav-link { display: block; text-decoration: none; color: inherit; }
+
+/* ── Timezone editor (sidebar, §5.9) ─────────────────────────────────── */
+.tz-editor { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.35rem 0.5rem; }
+.tz-input { width: 100%; padding: 0.4rem 0.55rem; font-size: 0.8rem; background: var(--input-bg); border: 1px solid var(--border); border-radius: 7px; color: var(--text); }
+.tz-input:focus { outline: none; border-color: var(--accent); }
+.tz-actions { display: flex; gap: 0.4rem; }
+.tz-error { font-size: 0.7rem; color: var(--danger); }

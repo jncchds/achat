@@ -382,7 +382,7 @@ is local to the `(BotId, UserId)` relationship.*
 Every memory row therefore carries `(BotId, UserId)`, and every retrieval filters on both
 before ranking. This doubles as the pgvector scan-narrowing filter (§6).
 
-### 5.2 Three layers `[PROPOSED]`
+### 5.2 Three layers `[PROPOSED — summary layer implemented in Phase 3]`
 
 A bot's knowledge of a user is assembled from three sources with different lifetimes:
 
@@ -418,6 +418,16 @@ memories. It is **not** in the request path; a turn never waits on extraction.
 token threshold: it takes the previous summary plus the newly-aged-out messages and rewrites
 the summary in place.
 
+`[DECIDED]` (Phase 3) — the worker is a periodic sweep (every 15s) over conversations whose
+un-summarised tail (messages after the summary's watermark, `CoversUpToMessageId`) exceeds
+`Chat:SummaryTailTokens`. It rewrites the single summary row in place and advances the
+watermark; a failed pass leaves the watermark untouched so the same tail retries on the
+next sweep. The summary prompt requires recording every personal detail the user has shared
+(names, dates, plans, preferences) — the bot must be able to answer questions about any of
+them later. A pass that ends `finish_reason=length` is treated as a failure: a truncated
+summary must never replace a good one. Verified end-to-end: a bot recalled facts planted
+far outside its recent-history window, and reacted correctly to a multi-hour silence.
+
 ### 5.4 Retrieval `[PROPOSED]`
 
 On each turn, before calling the model:
@@ -441,7 +451,7 @@ Recency matters because a friend should favour what is currently true; importanc
 extraction mark "she got the job" above "she likes oat milk". Defaults need tuning against
 real conversations — treat the initial numbers as guesses.
 
-### 5.5 Prompt assembly `[PROPOSED]`
+### 5.5 Prompt assembly `[PROPOSED — implemented in Phase 3 (memories land in Phase 4)]`
 
 ```
 ┌ system ────────────────────────────────────┐
@@ -462,6 +472,13 @@ hardcoded, with the recent-history block absorbing whatever the others do not us
 point: persona 10%, memories 15%, summary 10%, recent history 50%, reserved for the response
 15%. Blocks are filled in priority order and truncated at their ceiling — persona is never
 truncated, memories drop lowest-scored first, history drops oldest first.
+
+`[DECIDED]` (Phase 3) — v1 has no context-window detection, so the budget is computed
+against an assumed window (`Chat:AssumedContextTokens`, default 32 000) with the shares
+`Chat:BudgetPersonaPercent` / `BudgetSummaryPercent` / `BudgetHistoryPercent` (default
+10/10/50). Token counts are estimated as characters/4 until a real tokenizer is available.
+The summary is truncated from its beginning (its most recent content is kept); history
+drops oldest first; persona is never truncated.
 
 ### 5.6 Lifecycle and user control `[PROPOSED]`
 
@@ -551,16 +568,21 @@ Consequences:
 - **Every `Message` and `Memory` needs a trustworthy `CreatedAt`.** Store UTC, render in the
   user's zone.
 - **A user timezone setting is required.** Without it, "it is late at night" is wrong for
-  anyone not co-located with the server. `[OPEN]` — captured from the browser at login and
-  stored on the user, or set explicitly in settings? Browser capture with a manual override is
-  the usual answer.
+  anyone not co-located with the server. `[DECIDED]` — **both**: captured from the browser
+  (`Intl.DateTimeFormat().resolvedOptions().timeZone`) at login and stored on the user,
+  with a manual override in the app (sidebar → ⏰, IANA name validated server-side).
+  Prompts render "now" in the user's zone.
 - Rendering relative time is a **presentation concern of prompt assembly** (§5.5), not stored
   data — the same memory renders as "yesterday" or "last year" depending on when it is
   recalled.
 
-`[OPEN]` — the gap threshold (an hour? six?), and whether the bot should be told about a long
-absence explicitly ("you have not spoken in 11 days") rather than left to infer it from a
-marker.
+`[DECIDED]` (v1) — **six hours** by default, configurable (`Chat:GapThresholdMinutes`), so
+ordinary same-day exchanges stay clean. Absences are told **both ways**: a human-scale
+marker ("— 3 days later —") is prefixed to the message after the silence, and the new
+message itself carries it when the user returns to a quiet timeline — the bot reads the
+absence directly rather than guessing it. Markers ride on the following message rather
+than being standalone system messages: several production backends (vLLM/SGLang chat
+templates) reject system messages mid-conversation.
 
 ### 5.10 Open questions
 

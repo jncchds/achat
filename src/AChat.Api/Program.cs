@@ -78,6 +78,9 @@ builder.Services.AddHttpContextAccessor();
 // ── Chat + prompt assembly (§5.5, §5.9) ─────────────────────────────────────────
 builder.Services.AddScoped<ChatService>();
 
+// ── Rolling summary worker (§5.3) — background, never in the request path ────
+builder.Services.AddHostedService<SummaryService>();
+
 // ── API ─────────────────────────────────────────────────────────────────────────
 builder.Services.AddControllers()
     .AddJsonOptions(o => ConfigureJsonSerializer(o.JsonSerializerOptions));

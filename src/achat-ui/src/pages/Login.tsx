@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { login } from '../api'
+import { login, browserTimezone } from '../api'
 import { useAuth } from '../hooks/useAuth'
 
 export default function Login() {
@@ -14,7 +14,7 @@ export default function Login() {
     e.preventDefault()
     setError('')
     try {
-      await login(username, password)
+      await login(username, password, browserTimezone())
       await refresh()
       navigate('/bots')
     } catch (err: unknown) {

@@ -3,7 +3,7 @@ import { NavLink, Outlet } from 'react-router-dom'
 import Sidebar, { SidebarDivider, SidebarSection } from '../components/Sidebar'
 import Avatar from '../components/Avatar'
 import { useAuth } from '../hooks/useAuth'
-import { recentBots, type Bot } from '../api'
+import { apiError, recentBots, setTimezone, type Bot } from '../api'
 
 /**
  * The app shell (§9.1a): pinned top block (Bots / Presets / Admin), the last N bots
@@ -26,6 +26,7 @@ export default function AppLayout() {
       <Sidebar
         bottomChildren={
           <>
+            <TimezoneEditor />
             <div className="sidebar-divider" />
             <div className="sidebar-bot" title={user?.username}>
               <Avatar name={user?.displayName ?? '?'} url={null} size="sm" />
@@ -101,5 +102,74 @@ export default function AppLayout() {
         <Outlet />
       </main>
     </div>
+  )
+}
+
+const COMMON_ZONES = [
+  'UTC', 'Europe/Moscow', 'Europe/London', 'Europe/Berlin', 'Europe/Istanbul',
+  'America/New_York', 'America/Chicago', 'America/Los_Angeles', 'Asia/Tokyo',
+  'Asia/Shanghai', 'Asia/Singapore', 'Asia/Dubai', 'Australia/Sydney',
+]
+
+/**
+ * §5.9 — the user's timezone: captured from the browser at login, editable here.
+ * The bot's sense of "now" and all relative ages in prompts render in this zone.
+ */
+function TimezoneEditor() {
+  const { user, setUser } = useAuth()
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(user?.timezone ?? '')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const open = () => {
+    setValue(user?.timezone ?? '')
+    setError('')
+    setEditing(true)
+  }
+
+  const save = async () => {
+    if (!value.trim()) { setError('Enter a timezone name (IANA, e.g. Europe/Moscow).'); return }
+    setBusy(true)
+    try {
+      const updated = await setTimezone(value.trim())
+      setUser(updated)
+      setEditing(false)
+    } catch (e) {
+      setError(apiError(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="tz-editor" title="Your timezone (§5.9)">
+        <input
+          className="tz-input"
+          value={value}
+          placeholder="Europe/Moscow"
+          list="tz-zones"
+          onChange={e => setValue(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') void save(); if (e.key === 'Escape') setEditing(false) }}
+          autoFocus
+        />
+        <datalist id="tz-zones">
+          {COMMON_ZONES.map(z => <option key={z} value={z} />)}
+        </datalist>
+        <div className="tz-actions">
+          <button className="btn-primary btn-sm" disabled={busy} onClick={() => void save()}>Save</button>
+          <button className="btn-ghost btn-sm" disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
+        </div>
+        {error && <div className="tz-error">{error}</div>}
+      </div>
+    )
+  }
+
+  return (
+    <button className="sidebar-btn" onClick={open} title={user?.timezone ? `Timezone: ${user.timezone}` : 'Set your timezone'}>
+      <span className="s-icon">⏰</span>
+      <span className="s-label">{user?.timezone ?? 'Set timezone'}</span>
+    </button>
   )
 }

@@ -154,11 +154,27 @@ export function apiError(e: unknown): string {
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
-export async function login(username: string, password: string) {
-  const { data } = await http.post<{ token: string; user: User }>('/api/auth/login', { username, password })
+export async function login(username: string, password: string, timezone?: string | null) {
+  const { data } = await http.post<{ token: string; user: User }>('/api/auth/login', {
+    username,
+    password,
+    timezone: timezone ?? null,
+  })
   setToken(data.token)
   setStoredUser(data.user)
   return data.user
+}
+
+/** §5.9 — the user's IANA timezone (manual override; browser capture happens at login). */
+export async function setTimezone(timezone: string): Promise<User> {
+  const { data } = await http.patch<User>('/api/auth/me/timezone', { timezone })
+  setStoredUser(data)
+  return data
+}
+
+/** The device's IANA timezone, for browser capture at login (§5.9). */
+export function browserTimezone(): string | null {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone ?? null } catch { return null }
 }
 
 export async function me(): Promise<User> {

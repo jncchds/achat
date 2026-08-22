@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AppLayout from './layouts/AppLayout'
 import Login from './pages/Login'
 import Bots from './pages/Bots'
+import BotMemories from './pages/BotMemories'
 import Chat from './pages/Chat'
 import Presets from './pages/Presets'
 import Admin from './pages/Admin'
@@ -17,6 +18,7 @@ function Protected() {
       <Route element={<AppLayout />}>
         <Route path="/bots" element={<Bots />} />
         <Route path="/bots/:botId" element={<Chat />} />
+        <Route path="/bots/:botId/memories" element={<BotMemories />} />
         <Route path="/presets" element={<Presets />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="/admin/interactions" element={<Interactions />} />

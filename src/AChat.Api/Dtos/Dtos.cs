@@ -111,6 +111,47 @@ public sealed record BotRequest
     public int PresetId { get; init; }
 }
 
+public sealed record MemoryDto
+{
+    public int Id { get; init; }
+    public string Content { get; init; } = "";
+    public MemoryKind Kind { get; init; }
+    public int Importance { get; init; }
+    public bool IsPinned { get; init; }
+    public MemorySource Source { get; init; }
+    public int? SourceMessageId { get; init; }
+    public int? SupersededByMemoryId { get; init; }
+    public bool IsDeleted { get; init; }
+    public DateTime CreatedAt { get; init; }
+    public DateTime? LastRecalledAt { get; init; }
+    public int RecallCount { get; init; }
+
+    public static MemoryDto From(Memory m) => new()
+    {
+        Id = m.Id,
+        Content = m.Content,
+        Kind = m.Kind,
+        Importance = m.Importance,
+        IsPinned = m.IsPinned,
+        Source = m.Source,
+        SourceMessageId = m.SourceMessageId,
+        SupersededByMemoryId = m.SupersededByMemoryId,
+        IsDeleted = m.IsDeleted,
+        CreatedAt = m.CreatedAt,
+        LastRecalledAt = m.LastRecalledAt,
+        RecallCount = m.RecallCount,
+    };
+}
+
+public sealed record MemoryUpdateRequest
+{
+    public string? Content { get; init; }
+    public MemoryKind? Kind { get; init; }
+    public int? Importance { get; init; }
+}
+
+public sealed record MemoryPinRequest(bool Pinned);
+
 public sealed record MessageDto
 {
     public int Id { get; init; }
@@ -145,6 +186,8 @@ public sealed record InteractionDetailDto
 {
     public int Id { get; init; }
     public InteractionPurpose Purpose { get; init; }
+    /// <summary>JSON array of recalled memory ids ("[3,7]"), null when retrieval ran nothing.</summary>
+    public string? RecalledMemoryIds { get; init; }
     public int? BotId { get; init; }
     public int UserId { get; init; }
     public int PresetId { get; init; }

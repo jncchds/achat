@@ -81,6 +81,10 @@ builder.Services.AddScoped<ChatService>();
 // ── Rolling summary worker (§5.3) — background, never in the request path ────
 builder.Services.AddHostedService<SummaryService>();
 
+// ── Memory retrieval + extraction (§5.3–5.4) ────────────────────────────────
+builder.Services.AddSingleton(MemoryRetriever.FromConfiguration(builder.Configuration));
+builder.Services.AddHostedService<MemoryExtractionService>();
+
 // ── API ─────────────────────────────────────────────────────────────────────────
 builder.Services.AddControllers()
     .AddJsonOptions(o => ConfigureJsonSerializer(o.JsonSerializerOptions));

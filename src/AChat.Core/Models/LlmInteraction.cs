@@ -53,6 +53,13 @@ public class LlmInteraction
     /// <summary>Error message + provider error payload when <see cref="Failed"/>.</summary>
     public string? FailureReason { get; set; }
 
+    /// <summary>
+    /// Ids of the memories recalled into this prompt, as a JSON array of ints
+    /// (e.g. "[3,7]"). Null when no retrieval ran. Lets the viewer show exactly
+    /// which memories a reply leaned on (§5.6, §5.10).
+    /// </summary>
+    public string? RecalledMemoryIds { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public Bot? Bot { get; set; }

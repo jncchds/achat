@@ -38,10 +38,20 @@ with the `ACHAT_` prefix and .NET nested-key convention (`ACHAT_Section__Key`):
 | `Chat__HistoryTurns` | `20` | Recent-history window (messages) in the prompt |
 | `Chat__GapThresholdMinutes` | `360` | Silence above this gets a gap marker in the prompt (§5.9) |
 | `Chat__AssumedContextTokens` | `32000` | Assumed context window for prompt budgeting (§5.5) |
-| `Chat__BudgetPersonaPercent` / `BudgetSummaryPercent` / `BudgetHistoryPercent` | `10 / 10 / 50` | Budget shares (memories 15% arrive in Phase 4) |
+| `Chat__BudgetPersonaPercent` / `BudgetMemoryPercent` / `BudgetSummaryPercent` / `BudgetHistoryPercent` | `10 / 15 / 10 / 50` | Prompt budget shares; recent history absorbs the remainder |
 | `Chat__SummaryTailTokens` | `800` | Un-summarised tail that triggers a summary rewrite (§5.3) |
 | `Chat__SummaryMaxTokens` | `1024` | Output cap for the summary call (covers reasoning-model thinking) |
 | `Chat__SummaryTemperature` | `0.3` | Sampling temperature for the summary call |
+| `Memory__TopK` | `5` | Max memories retrieved per turn (§5.4) |
+| `Memory__ScoreFloor` | `0.35` | Rank score below which a memory is not retrieved |
+| `Memory__WeightSimilarity` / `WeightImportance` / `WeightRecency` | `0.6 / 0.2 / 0.2` | Ranking weights (§5.4) |
+| `Memory__RecencyHalflifeDays` | `30` | Recency decay half-life |
+| `Memory__DedupThreshold` / `SupersedeThreshold` | `0.92 / 0.85` | Candidate-vs-nearest similarity: ≥0.92 drop as duplicate, ≥0.85 supersede (§5.3) |
+| `Extraction__MinNewMessages` | `8` | New messages since the watermark that trigger an extraction pass (§5.3) |
+| `Extraction__IdleMinutes` | `10` | …or conversation idle for this long |
+| `Extraction__MaxCandidates` | `10` | Cap on candidates per pass |
+| `Extraction__MaxTailMessages` | `40` | Tail size sent to the extractor |
+| `Extraction__MaxTokens` | `1024` | Output cap for the extraction call (covers reasoning-model thinking) |
 
 ## Development workflow
 
@@ -98,4 +108,10 @@ src/
   manual override), rolling summary worker (utility model, watermark, logged),
   token-budgeted prompt assembly, gap markers — verified: a bot recalls facts planted
   outside its recent window and reacts to a multi-hour silence
-- Phases 4–8: see the delivery plan in `docs/design.md` §12a
+- **Phase 4 — Long-term memory** ✅ background extraction (utility model, watermark,
+  dedup/supersede), cosine retrieval ranked by similarity + importance + recency with
+  relative ages, recalled ids surfaced in chat and in the interaction log, memory
+  viewer (list / search / edit / pin / forget / forget-all), embedding-model lock
+  (§5.7) — verified: facts planted outside the recent window are recalled by name, and
+  a viewer edit flows into the bot's next answer
+- Phases 5–8: see the delivery plan in `docs/design.md` §12a

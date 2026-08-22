@@ -168,6 +168,11 @@ namespace AChat.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int>("ExtractionUpToMessageId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
                     b.Property<DateTime?>("LastMessageAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -276,6 +281,9 @@ namespace AChat.Infrastructure.Migrations
                         .HasColumnType("integer");
 
                     b.Property<string>("Reasoning")
+                        .HasColumnType("text");
+
+                    b.Property<string>("RecalledMemoryIds")
                         .HasColumnType("text");
 
                     b.Property<string>("RequestBody")

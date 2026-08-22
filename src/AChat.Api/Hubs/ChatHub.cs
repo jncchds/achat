@@ -91,6 +91,7 @@ public class ChatHub(ChatService chat) : Hub
                     promptTokens = result.PromptTokens,
                     completionTokens = result.CompletionTokens,
                     totalTokens = result.TotalTokens,
+                    recalledMemoryIds = result.RecalledMemoryIds,
                 });
             }
         }

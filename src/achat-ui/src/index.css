@@ -1020,3 +1020,21 @@ pre.code { background: var(--input-bg); border: 1px solid var(--border); border-
 .tz-input:focus { outline: none; border-color: var(--accent); }
 .tz-actions { display: flex; gap: 0.4rem; }
 .tz-error { font-size: 0.7rem; color: var(--danger); }
+
+/* ── Chat toolbar + recalled link ──────────────────────────────────── */
+.chat-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 0.25rem 1rem 0.5rem; }
+.msg-recalled { display: inline-block; margin-top: 0.35rem; font-size: 0.72rem; color: var(--accent); text-decoration: none; }
+.msg-recalled:hover { text-decoration: underline; }
+
+/* ── Memory viewer (§5.6) ───────────────────────────────────────────── */
+.memory-card { padding: 0.75rem 1rem; }
+.memory-card.pinned { border-color: var(--accent); }
+.memory-card.faded { opacity: 0.65; }
+.memory-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; flex-wrap: wrap; }
+.memory-content { margin: 0 0 0.5rem; line-height: 1.5; white-space: pre-wrap; }
+.memory-actions { margin-top: 0.25rem; }
+.stars { font-size: 0.75rem; letter-spacing: 0.1em; color: var(--accent); }
+.stars .dim { color: var(--border); }
+.danger-text { color: var(--danger); }
+.search-input { width: 100%; padding: 0.5rem 0.75rem; font-size: 0.9rem; background: var(--input-bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); }
+.search-input:focus { outline: none; border-color: var(--accent); }

@@ -128,11 +128,17 @@ public static class PromptAssembly
         string? timezone,
         DateTime utcNow,
         ConversationSummary? summary,
-        PromptBudget? budget = null)
+        PromptBudget? budget = null,
+        string? memoryBlock = null)
     {
         var sb = new System.Text.StringBuilder();
         sb.Append(BuildPersonaBlock(bot));
         sb.Append('\n').Append("It is now ").Append(FormatCurrentTime(utcNow, timezone)).Append('\n');
+        if (!string.IsNullOrWhiteSpace(memoryBlock))
+        {
+            // Memories capped by budget, lowest-scored dropped first (§5.5).
+            sb.Append('\n').Append(memoryBlock).Append('\n');
+        }
         if (summary is { Content.Length: > 0 })
         {
             var block = BuildSummaryBlock(summary, utcNow, timezone);
@@ -191,13 +197,15 @@ public sealed class PromptBudget
 {
     public int AssumedContextTokens { get; }
     public int PersonaTokens { get; }
+    public int MemoryTokens { get; }
     public int SummaryTokens { get; }
     public int HistoryTokens { get; }
 
-    public PromptBudget(int assumedContextTokens, int personaPercent, int summaryPercent, int historyPercent)
+    public PromptBudget(int assumedContextTokens, int personaPercent, int memoryPercent, int summaryPercent, int historyPercent)
     {
         AssumedContextTokens = assumedContextTokens;
         PersonaTokens = assumedContextTokens * personaPercent / 100;
+        MemoryTokens = assumedContextTokens * memoryPercent / 100;
         SummaryTokens = assumedContextTokens * summaryPercent / 100;
         HistoryTokens = assumedContextTokens * historyPercent / 100;
     }
@@ -205,6 +213,32 @@ public sealed class PromptBudget
     public static PromptBudget FromConfiguration(IConfiguration config) => new(
         config.GetValue("Chat:AssumedContextTokens", 32_000),
         config.GetValue("Chat:BudgetPersonaPercent", 10),
+        config.GetValue("Chat:BudgetMemoryPercent", 15),
         config.GetValue("Chat:BudgetSummaryPercent", 10),
         config.GetValue("Chat:BudgetHistoryPercent", 50));
+
+    /// <summary>
+    /// Trim recalled memories to the budget, dropping lowest-scored first (§5.5).
+    /// Pinned memories are exempt from dropping.
+    /// </summary>
+    public List<ScoredMemory> TrimMemories(List<ScoredMemory> memories)
+    {
+        if (MemoryTokens <= 0 || memories.Count == 0) return memories;
+        var result = new List<ScoredMemory>();
+        var used = 0;
+        // Pinned first (never dropped), then by score descending. What doesn't fit
+        // is skipped — a smaller, lower-scored memory may still fit (§5.5).
+        var ordered = memories
+            .OrderByDescending(m => m.Pinned)
+            .ThenByDescending(m => m.Score)
+            .ToList();
+        foreach (var m in ordered)
+        {
+            var tokens = PromptAssembly.EstimateTokens(m.Memory.Content) + 4; // + age prefix
+            if (!m.Pinned && used + tokens > MemoryTokens) continue;
+            used += tokens;
+            result.Add(m);
+        }
+        return result;
+    }
 }

@@ -7,16 +7,18 @@ using Microsoft.EntityFrameworkCore;
 namespace AChat.Api.Services;
 
 /// <summary>
-/// One turn of conversation: persist the user's message, assemble the prompt, stream
-/// the reply, persist it, and log the interaction (§4.4). All provider errors are
-/// captured — the log is the debugging surface.
+/// One turn of conversation: persist the user's message, retrieve memories, assemble
+/// the prompt, stream the reply, persist it, and log the interaction (§4.4). All
+/// provider errors are captured — the log is the debugging surface.
 /// </summary>
 public sealed class ChatService
 {
     private readonly AppDbContext _db;
     private readonly ILlmProviderFactory _factory;
     private readonly IApiKeyProtector _keys;
+    private readonly MemoryRetriever _memories;
     private readonly IConfiguration _config;
+    private readonly ILogger<ChatService> _log;
     private readonly int _historyTurns;
     private readonly TimeSpan _gapThreshold;
     private readonly PromptBudget _budget;
@@ -30,14 +32,18 @@ public sealed class ChatService
         string? Error,
         int? PromptTokens,
         int? CompletionTokens,
-        int? TotalTokens);
+        int? TotalTokens,
+        IReadOnlyList<int> RecalledMemoryIds);
 
-    public ChatService(AppDbContext db, ILlmProviderFactory factory, IApiKeyProtector keys, IConfiguration config)
+    public ChatService(AppDbContext db, ILlmProviderFactory factory, IApiKeyProtector keys,
+        MemoryRetriever memories, IConfiguration config, ILogger<ChatService> log)
     {
         _db = db;
         _factory = factory;
         _keys = keys;
+        _memories = memories;
         _config = config;
+        _log = log;
         _historyTurns = config.GetValue("Chat:HistoryTurns", 20);
         _gapThreshold = TimeSpan.FromMinutes(config.GetValue("Chat:GapThresholdMinutes", 360));
         _budget = PromptBudget.FromConfiguration(config);
@@ -90,44 +96,6 @@ public sealed class ChatService
         // The user's turn is on the record — the client can now show the run as started.
         if (onStart is not null) await onStart(userMessage.Id);
 
-        // ── Prompt assembly (§5.5, §5.9) ─────────────────────────────────────────
-        // System block: persona → current time in the user's zone → rolling summary.
-        var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId);
-        var summary = await _db.ConversationSummaries.AsNoTracking()
-            .FirstOrDefaultAsync(s => s.BotId == bot.Id && s.UserId == userId);
-
-        var now = DateTime.UtcNow;
-        var systemBlock = PromptAssembly.BuildSystemBlock(bot, user?.Timezone, now, summary, _budget);
-
-        // Recent history: last N turns verbatim, with gap markers where the silence
-        // was long enough to be noticed (§5.9.2).
-        var historyRaw = await _db.Messages
-            .AsNoTracking()
-            .Where(m => m.ConversationId == conversation.Id && m.Id < userMessage.Id)
-            .OrderByDescending(m => m.Id)
-            .Take(_historyTurns)
-            .ToListAsync();
-        historyRaw.Reverse();
-
-        var history = PromptAssembly.BuildHistoryMessages(historyRaw, _gapThreshold);
-
-        // Budget: history drops oldest first (§5.5).
-        history = DropOldestOverBudget(history, _budget.HistoryTokens);
-
-        var requestMessages = new List<LlmChatMessage>
-        {
-            new(MessageRole.System, systemBlock),
-        };
-        requestMessages.AddRange(history);
-
-        // The user came back after a long absence — the gap between the window's end
-        // and this new message gets a marker, prefixed to the new message (§5.9.2).
-        var returnGap = historyRaw.Count > 0
-            ? PromptAssembly.FormatReturnGap(historyRaw[^1].CreatedAt, now, _gapThreshold)
-            : null;
-        requestMessages.Add(new LlmChatMessage(MessageRole.User,
-            (returnGap is null ? "" : returnGap + "\n") + content));
-
         // ── Provider ─────────────────────────────────────────────────────────────
         if (!_factory.IsSupported(preset.Provider))
             throw new NotSupportedException(
@@ -161,6 +129,68 @@ public sealed class ChatService
             MaxTokens = preset.MaxTokens,
             TimeoutMs = preset.TimeoutMs ?? 120_000,
         });
+
+        // ── Memory retrieval (§5.4) — best-effort: a retrieval failure degrades to
+        //    a memoryless turn, it never blocks the conversation ─────────────────
+        var now = DateTime.UtcNow;
+        var recalled = new List<ScoredMemory>();
+        if (!string.IsNullOrWhiteSpace(preset.EmbeddingModel))
+        {
+            try
+            {
+                var queryVectors = await provider.EmbedAsync(preset.EmbeddingModel, [content], ct);
+                var candidates = await _memories.SearchAsync(
+                    _db, preset.EmbeddingModel, bot.Id, userId,
+                    queryVectors[0], _memories.TopK * 4, ct);
+                recalled = MemoryRetriever.Select(candidates, now, _memories);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log.LogWarning(ex, "Memory retrieval failed for bot {BotId} — continuing without memories", bot.Id);
+            }
+        }
+
+        // ── Prompt assembly (§5.5, §5.9) ─────────────────────────────────────────
+        // System block: persona → current time in the user's zone → memories → summary.
+        var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId);
+        var summary = await _db.ConversationSummaries.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.BotId == bot.Id && s.UserId == userId);
+
+        recalled = _budget.TrimMemories(recalled);
+        var memoryBlock = recalled.Count > 0
+            ? MemoryRetriever.BuildMemoryBlock(recalled, now)
+            : null;
+        var systemBlock = PromptAssembly.BuildSystemBlock(
+            bot, user?.Timezone, now, summary, _budget, memoryBlock);
+
+        // Recent history: last N turns verbatim, with gap markers where the silence
+        // was long enough to be noticed (§5.9.2).
+        var historyRaw = await _db.Messages
+            .AsNoTracking()
+            .Where(m => m.ConversationId == conversation.Id && m.Id < userMessage.Id)
+            .OrderByDescending(m => m.Id)
+            .Take(_historyTurns)
+            .ToListAsync();
+        historyRaw.Reverse();
+
+        var history = PromptAssembly.BuildHistoryMessages(historyRaw, _gapThreshold);
+
+        // Budget: history drops oldest first (§5.5).
+        history = DropOldestOverBudget(history, _budget.HistoryTokens);
+
+        var requestMessages = new List<LlmChatMessage>
+        {
+            new(MessageRole.System, systemBlock),
+        };
+        requestMessages.AddRange(history);
+
+        // The user came back after a long absence — the gap between the window's end
+        // and this new message gets a marker, prefixed to the new message (§5.9.2).
+        var returnGap = historyRaw.Count > 0
+            ? PromptAssembly.FormatReturnGap(historyRaw[^1].CreatedAt, now, _gapThreshold)
+            : null;
+        requestMessages.Add(new LlmChatMessage(MessageRole.User,
+            (returnGap is null ? "" : returnGap + "\n") + content));
 
         var request = new LlmChatRequest
         {
@@ -275,9 +305,26 @@ public sealed class ChatService
             FinishReason = finishReason,
             Failed = failed || canceled,
             FailureReason = error,
+            RecalledMemoryIds = recalled.Count > 0
+                ? System.Text.Json.JsonSerializer.Serialize(recalled.Select(m => m.Memory.Id).ToArray())
+                : null,
             CreatedAt = DateTime.UtcNow,
         };
         _db.LlmInteractions.Add(interaction);
+
+        // Recall stats (§5.8): LastRecalledAt / RecallCount feed the ranking's recency
+        // signal and the viewer's "last recalled" column.
+        if (!failed && recalled.Count > 0)
+        {
+            var recalledIds = recalled.Select(m => m.Memory.Id).ToArray();
+            var rows = await _db.Memories.Where(m => recalledIds.Contains(m.Id)).ToListAsync();
+            foreach (var m in rows)
+            {
+                m.LastRecalledAt = interaction.CreatedAt;
+                m.RecallCount += 1;
+            }
+        }
+
         await _db.SaveChangesAsync();
 
         return new ChatRunResult(
@@ -289,7 +336,8 @@ public sealed class ChatService
             error,
             promptTokens,
             completionTokens,
-            totalTokens);
+            totalTokens,
+            recalled.Select(m => m.Memory.Id).ToArray());
     }
 
     /// <summary>History budget: keep the newest messages, drop oldest first (§5.5).</summary>

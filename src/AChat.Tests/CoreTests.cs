@@ -146,7 +146,7 @@ public class TemporalAssemblyTests
             Content = "OLD-" + new string('x', 4000) + " RECENT-ANCHOR",
             UpdatedAt = UtcNow,
         };
-        var budget = new PromptBudget(1000, 10, 10, 50); // summary cap: 100 tokens = 400 chars
+        var budget = new PromptBudget(1000, 10, 15, 10, 50); // summary cap: 100 tokens = 400 chars
         var block = PromptAssembly.BuildSystemBlock(new Bot { Name = "M" }, null, UtcNow, summary, budget);
         Assert.Contains("RECENT-ANCHOR", block);   // the recent end survives
         Assert.DoesNotContain("OLD-", block);       // the ancient head is trimmed away
@@ -175,6 +175,160 @@ public class TemporalAssemblyTests
         Assert.EndsWith("tok200", keepEnd); // the newest words survive
         Assert.StartsWith("…", keepEnd);
         Assert.True(keepEnd[1..].Split(' ').All(w => w.StartsWith("tok")));
+    }
+}
+
+public class MemoryRetrievalTests
+{
+    private static MemoryRetriever Cfg(float floor = 0.35f, int topK = 5,
+        float wSim = 0.6f, float wImp = 0.2f, float wRec = 0.2f, float halflife = 30f)
+        => new(topK, floor, wSim, wImp, wRec, halflife);
+
+    [Fact]
+    public void Rank_combines_similarity_importance_and_recency()
+    {
+        // Perfect similarity, max importance, brand new → all three signals max.
+        var fresh = MemoryRetriever.Rank(1f, 5, 0, 0.6f, 0.2f, 0.2f, 30f);
+        Assert.Equal(1.0, fresh, 3);
+
+        // Same similarity, but a year old → recency signal ~0.
+        var stale = MemoryRetriever.Rank(1f, 5, 365, 0.6f, 0.2f, 0.2f, 30f);
+        Assert.True(stale < fresh);
+
+        // Importance alone separates memories with equal similarity/age.
+        Assert.True(
+            MemoryRetriever.Rank(0.5f, 5, 10, 0.6f, 0.2f, 0.2f, 30f) >
+            MemoryRetriever.Rank(0.5f, 1, 10, 0.6f, 0.2f, 0.2f, 30f));
+    }
+
+    [Fact]
+    public void Select_keeps_topK_above_floor_and_always_includes_pinned()
+    {
+        var now = new DateTime(2026, 8, 21, 12, 0, 0, DateTimeKind.Utc);
+        var cfg = Cfg(floor: 0.4f, topK: 2);
+
+        Memory M(int id, float sim, int imp, bool pinned, int ageDays) => new()
+        {
+            Id = id,
+            Content = $"memory {id}",
+            Importance = imp,
+            IsPinned = pinned,
+            CreatedAt = now.AddDays(-ageDays),
+        };
+
+        var high = M(1, 0.9f, 4, pinned: false, 1);
+        var mid = M(2, 0.7f, 3, pinned: false, 5);
+        var low = M(3, 0.5f, 1, pinned: false, 30);
+        var weak = M(4, 0.2f, 1, pinned: false, 1);   // below floor
+        var pinnedWeak = M(5, 0.1f, 1, pinned: true, 400); // below floor, but pinned
+
+        var selected = MemoryRetriever.Select(
+            new[] { (high, 0.9f), (mid, 0.7f), (low, 0.5f), (weak, 0.2f), (pinnedWeak, 0.1f) },
+            now, cfg);
+
+        var ids = selected.Select(s => s.Memory.Id).ToHashSet();
+        Assert.Contains(1, ids);          // top
+        Assert.Contains(2, ids);          // second
+        Assert.Contains(5, ids);          // pinned always rides along (§5.4.4)
+        Assert.DoesNotContain(4, ids);    // below floor
+        Assert.Equal(3, ids.Count);       // K=2 + 1 pinned
+    }
+
+    [Theory]
+    [InlineData(0, "earlier today")]
+    [InlineData(0.2, "hours ago")]      // ~5 hours
+    [InlineData(1, "yesterday")]
+    [InlineData(10, "10 days ago")]
+    [InlineData(45, "a month")]
+    [InlineData(400, "a year")]
+    [InlineData(800, "2 years")]
+    public void RelativeAge_uses_human_scale(double daysAgo, string fragment)
+    {
+        var now = new DateTime(2026, 8, 21, 12, 0, 0, DateTimeKind.Utc);
+        Assert.Contains(fragment, MemoryRetriever.RelativeAge(now.AddDays(-daysAgo), now));
+    }
+
+    [Fact]
+    public void TrimMemories_drops_what_does_not_fit_and_never_pinned()
+    {
+        var budget = new PromptBudget(200, 10, 15, 10, 50); // memory cap: 30 tokens = 120 chars
+        ScoredMemory Mem(int id, string content, float score, bool pinned) => new()
+        {
+            Memory = new Memory { Id = id, Content = content },
+            Similarity = 0,
+            Score = score,
+            Pinned = pinned,
+        };
+
+        var list = new List<ScoredMemory>
+        {
+            Mem(1, new string('a', 120), score: 0.9f, pinned: false), // 124 — over budget with the others
+            Mem(2, "short", score: 0.8f, pinned: false),              // 9
+            Mem(3, "pinned", score: 0.1f, pinned: true),              // 10 — always kept
+        };
+
+        var trimmed = budget.TrimMemories(list);
+        Assert.Contains(trimmed, m => m.Memory.Id == 3); // pinned survives
+        Assert.Contains(trimmed, m => m.Memory.Id == 2); // the short one fits (10+9 ≤ 30)
+        Assert.DoesNotContain(trimmed, m => m.Memory.Id == 1); // the long one is dropped
+    }
+}
+
+public class ExtractionLogicTests
+{
+    [Fact]
+    public void ParseCandidates_handles_fences_prose_and_bad_elements()
+    {
+        var raw = "Sure! Here is the array:\n```json\n[\n"
+            + "{\"content\": \"User's cat is named Pixel\", \"kind\": \"fact\", \"importance\": 4},\n"
+            + "{\"content\": \"\"},\n"
+            + "{\"kind\": \"event\"},\n"
+            + "42\n"
+            + "]\n```\nHope that helps!";
+
+        var result = MemoryExtractionService.ParseCandidates(raw, max: 10);
+        Assert.Single(result);
+        Assert.Equal("User's cat is named Pixel", result[0].Content);
+        Assert.Equal(MemoryKind.Fact, result[0].Kind);
+        Assert.Equal(4, result[0].Importance);
+    }
+
+    [Fact]
+    public void ParseCandidates_clamps_importance_and_respects_max()
+    {
+        var raw = "[{\"content\":\"a\",\"importance\":99},{\"content\":\"b\"},{\"content\":\"c\"}]";
+        var result = MemoryExtractionService.ParseCandidates(raw, max: 2);
+        Assert.Equal(2, result.Count);
+        Assert.Equal(5, result[0].Importance); // clamped to 1..5
+    }
+
+    [Fact]
+    public void ParseCandidates_returns_empty_on_garbage()
+    {
+        Assert.Empty(MemoryExtractionService.ParseCandidates("no json here", 5));
+        Assert.Empty(MemoryExtractionService.ParseCandidates("[{broken", 5));
+    }
+
+    [Fact]
+    public void Decide_drops_duplicates_and_respects_human_edits()
+    {
+        // Near-identical → always a duplicate, even over a human edit.
+        Assert.Equal(MemoryExtractionService.CandidateAction.Drop,
+            MemoryExtractionService.Decide(0.95f, MemorySource.Extraction));
+        Assert.Equal(MemoryExtractionService.CandidateAction.Drop,
+            MemoryExtractionService.Decide(0.95f, MemorySource.UserEdited));
+
+        // Similar but not identical → supersede…
+        Assert.Equal(MemoryExtractionService.CandidateAction.Supersede,
+            MemoryExtractionService.Decide(0.90f, MemorySource.Extraction));
+
+        // …unless a human edited the existing row (§5.6).
+        Assert.Equal(MemoryExtractionService.CandidateAction.Drop,
+            MemoryExtractionService.Decide(0.90f, MemorySource.UserEdited));
+
+        // Unrelated → fresh insert.
+        Assert.Equal(MemoryExtractionService.CandidateAction.Insert,
+            MemoryExtractionService.Decide(0.50f, MemorySource.Extraction));
     }
 }
 

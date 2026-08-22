@@ -57,7 +57,7 @@ widen an already-working product rather than completing it.
 | `Bot` (virtual friend) | Per-user. References **exactly one** `LlmPreset` belonging to its creator. | `[DECIDED]` |
 | `Conversation` | `[OPEN]` — see §2.3 | `[OPEN]` |
 | `Message` | Turn in a conversation. | `[OPEN]` |
-| `Memory` | Embedded fact/episode owned by a bot. See §5. | `[OPEN]` |
+| `Memory` | Embedded fact/episode owned by a bot. See §5. | `[DECIDED]` |
 | `LlmInteraction` | Audit record of every LLM call, success or failure. See §4.4. | `[DECIDED]` |
 
 ### 2.2 Ownership rules `[DECIDED]`
@@ -382,7 +382,7 @@ is local to the `(BotId, UserId)` relationship.*
 Every memory row therefore carries `(BotId, UserId)`, and every retrieval filters on both
 before ranking. This doubles as the pgvector scan-narrowing filter (§6).
 
-### 5.2 Three layers `[PROPOSED — summary layer implemented in Phase 3]`
+### 5.2 Three layers `[DECIDED — all three layers implemented (Phases 3–4)]`
 
 A bot's knowledge of a user is assembled from three sources with different lifetimes:
 
@@ -396,7 +396,7 @@ Summary and memory serve different jobs and are both needed: the summary keeps t
 the relationship ("you have been talking about her thesis for weeks"), while memories recall
 *specifics* that similarity search can surface from months back ("her sister is named Ann").
 
-### 5.3 Memory formation `[PROPOSED]`
+### 5.3 Memory formation `[DECIDED — implemented in Phase 4]`
 
 A background hosted service — `MemoryExtractionService` — reads new messages and writes
 memories. It is **not** in the request path; a turn never waits on extraction.
@@ -428,7 +428,29 @@ them later. A pass that ends `finish_reason=length` is treated as a failure: a t
 summary must never replace a good one. Verified end-to-end: a bot recalled facts planted
 far outside its recent-history window, and reacted correctly to a multi-hour silence.
 
-### 5.4 Retrieval `[PROPOSED]`
+`[DECIDED]` (Phase 4) — extraction runs in the same 15s sweep, on a separate watermark
+(`Conversation.ExtractionUpToMessageId`) so the two passes are independent. Trigger:
+`Extraction:MinNewMessages` (default 8) new messages since the watermark, or the
+conversation idle for `Extraction:IdleMinutes` (default 10). One LLM call over the tail
+(`Extraction:MaxTailMessages`, default 40) on the **utility model** (`LlmPreset.UtilityModel`,
+falling back to the generation model), prompted for a JSON array of at most
+`Extraction:MaxCandidates` (default 10) candidates, each `{content, kind, importance}` —
+kind one of Fact / Preference / Event / Relationship, importance 1–5. The model is
+instructed to return `[]` for small talk; an empty array is a normal outcome. Candidates
+are embedded with the preset's embedding model, then each is compared to the nearest
+existing memory in scope: similarity ≥ `Memory:DedupThreshold` (0.92) → drop (duplicate);
+≥ `Memory:SupersedeThreshold` (0.85) → supersede (insert new, link the old row's
+`SupersededByMemoryId`); otherwise insert. A `UserEdited` neighbour is never superseded —
+it is dropped instead, so a human correction always wins. The watermark advances only
+after a pass fully succeeds; a failed pass leaves it untouched for retry. Every pass is
+logged to §4.4 with purpose `MemoryExtraction`.
+
+Verified end-to-end: planted facts (dog, preference, upcoming job) buried under filler
+turns outside the 4-message recent window were recalled by name in a later question, the
+interaction log recorded the exact recalled memory ids, and a viewer edit to a memory
+(adding a detail) flowed into the bot's next answer.
+
+### 5.4 Retrieval `[DECIDED — implemented in Phase 4]`
 
 On each turn, before calling the model:
 
@@ -451,7 +473,20 @@ Recency matters because a friend should favour what is currently true; importanc
 extraction mark "she got the job" above "she likes oat milk". Defaults need tuning against
 real conversations — treat the initial numbers as guesses.
 
-### 5.5 Prompt assembly `[PROPOSED — implemented in Phase 3 (memories land in Phase 4)]`
+`[DECIDED]` (Phase 4) — implemented as `MemoryRetriever` (raw SQL cosine search scoped to
+`(BotId, UserId)`, active and non-superseded rows, `EmbeddingModel` matching the preset's
+current one, then ranked in C# with the formula above). Defaults:
+`Memory:TopK` = 5, `Memory:ScoreFloor` = 0.35, weights 0.6 / 0.2 / 0.2, half-life
+`Memory:RecencyHalflifeDays` = 30. Pinned memories are always kept (they bypass the floor
+but are still ordered first). The selected memories are rendered into the prompt block with
+relative ages (§5.9), the ids are reported in the `chat.completed` hub event and stored on
+the interaction log row (`RecalledMemoryIds`) so the user can see exactly which memories
+shaped an answer. `LastRecalledAt` / `RecallCount` update on every use. A failed retrieval
+(offline endpoint, missing embedding model) degrades gracefully: the turn proceeds
+without memories and a warning is logged — a friend who occasionally forgets is better than
+one who stops talking.
+
+### 5.5 Prompt assembly `[DECIDED — implemented in Phases 3–4]`
 
 ```
 ┌ system ────────────────────────────────────┐
@@ -480,7 +515,12 @@ against an assumed window (`Chat:AssumedContextTokens`, default 32 000) with the
 The summary is truncated from its beginning (its most recent content is kept); history
 drops oldest first; persona is never truncated.
 
-### 5.6 Lifecycle and user control `[PROPOSED]`
+`[DECIDED]` (Phase 4) — the memory block is implemented: retrieved memories render as
+bullet lines, each with its relative age ("about 3 days ago") so the bot can frame old facts
+as old. Memory lines that do not fit the `Memory` share are skipped (never truncated
+mid-line); pinned memories are kept first. The full block is dropped if nothing fits.
+
+### 5.6 Lifecycle and user control `[DECIDED — implemented in Phase 4]`
 
 - **Superseding**: when extraction produces a memory that contradicts an existing one, the old
   row is marked `SupersededByMemoryId` rather than deleted — the history stays inspectable.
@@ -492,6 +532,22 @@ drops oldest first; persona is never truncated.
   "why did my friend say that", and the only remedy when extraction records something wrong.
   Edited rows are flagged so extraction never silently overwrites a human correction.
 - A user's memories are visible only to that user — including to the bot admin (§2.5.2).
+
+`[DECIDED]` (Phase 4) — all of the above is implemented:
+
+- Supersede, not delete: extraction links the old row via `SupersededByMemoryId`; the
+  viewer renders those rows in a separate *History* section (faded, read-only, no
+  supersede cycle possible from there).
+- No automatic forgetting — the only deletion path is the user's explicit forget.
+- Viewer (per bot): list (newest first), search (case-insensitive on content), edit
+  (re-embeds the row with the preset's embedding model when the content changes, sets
+  `Source = UserEdited`), pin/unpin, forget (soft delete: `IsDeleted = true`, still
+  inspectable in History), and *Forget everything* for the bot.
+- Manual add is **not** in v1 — the user edits what extraction produced rather than
+  authoring facts from scratch. Simpler, and it keeps the extraction-vs-correction
+  boundary clean (see §5.10, q2).
+- Every endpoint is scoped to the caller's `(BotId, UserId)`; other users' rows for the
+  same bot are never returned.
 
 ### 5.7 Embedding model stability `[DECIDED]`
 
@@ -518,7 +574,7 @@ re-embedding path needs. Retrieval filters on a match; a non-empty mismatch surf
 visible "re-indexing required" state rather than an empty result set. The columns must exist
 from the first migration — adding them after rows exist means re-embedding blind.
 
-### 5.8 Schema sketch `[PROPOSED]`
+### 5.8 Schema sketch `[DECIDED — implemented in Phase 4]`
 
 ```
 Memory
@@ -542,6 +598,12 @@ ConversationSummary
   CoversUpToMessageId int
   TokenCount, UpdatedAt
 ```
+
+`[DECIDED]` (Phase 4) — the implemented schema matches the sketch exactly (migration
+`AddMemoryExtractionWatermarkAndRecall` added `Conversation.ExtractionUpToMessageId` and
+`LlmInteraction.RecalledMemoryIds` on top). `EmbeddingDimension` is stored on every row
+so a model mismatch is detectable, per §5.7. `Kind` and `Source` are stored as integers
+(EF's default enum mapping) — raw SQL projections must read them as int.
 
 ### 5.9 Temporal awareness `[DECIDED]`
 
@@ -586,12 +648,16 @@ templates) reject system messages mid-conversation.
 
 ### 5.10 Open questions
 
-1. Initial values for *K*, the score floor, *M*, *T*, the ranking weights, and the half-life.
-2. Whether the user can add a memory by hand, or only edit what extraction produced.
-3. Does the persona itself get to reference memory placeholders, or is it static text?
-4. What the bot sees on the very first message of a new relationship — is there an onboarding
-   step where a user tells a bot about themselves?
-5. Should the *summary* also be user-visible and editable, like memories are (§5.6)?
+1. `[DECIDED]` (Phase 4) initial values — K = 5, score floor 0.35, M = 8 new messages,
+   T = 10 min idle, weights 0.6 / 0.2 / 0.2, half-life 30 days. All config keys, all
+   revisitable without code changes.
+2. `[DECIDED]` (Phase 4) — edit only; no manual add in v1 (§5.6).
+3. `[DECIDED]` (v1) — persona is static text; no memory placeholders. Memories are
+   assembled at prompt time (§5.5), so there is nothing to reference from the persona.
+4. `[OPEN]` — no onboarding step in v1. The first message goes to a fresh, memory-less
+   friend; extraction starts recording from turn one.
+5. `[OPEN]` — the summary is not user-visible or editable in v1. It is an internal
+   continuity device; memories (§5.6) are the user-facing record. Revisit if users ask.
 
 ---
 

@@ -91,6 +91,7 @@ public class InteractionsController(AppDbContext db) : ControllerBase
             FinishReason = i.FinishReason,
             Failed = i.Failed,
             FailureReason = i.FailureReason,
+            RecalledMemoryIds = i.RecalledMemoryIds,
             CreatedAt = i.CreatedAt,
         });
     }

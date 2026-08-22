@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { HubConnectionBuilder, LogLevel, type HubConnection } from '@microsoft/signalr'
 import { apiError, getBot, getMessages, getToken, type Bot, type Message } from '../api'
 import Avatar from '../components/Avatar'
@@ -14,6 +14,8 @@ interface UiMsg {
   error?: string
   streaming?: boolean
   at: string
+  /** Memory ids this reply leaned on (§5.6) — shown as a link to the memories page. */
+  recalled?: number[]
 }
 
 function toUiMsg(m: Message): UiMsg {
@@ -24,6 +26,7 @@ function toUiMsg(m: Message): UiMsg {
     reasoning: m.reasoning ?? '',
     complete: m.isComplete,
     at: m.createdAt,
+    recalled: [],
   }
 }
 
@@ -72,12 +75,22 @@ export default function Chat() {
     conn.on('chat.reasoning', (m: { delta: string }) => {
       patchStreaming(d => ({ ...d, reasoning: d.reasoning + m.delta }))
     })
-    conn.on('chat.completed', () => {
-      patchStreaming(d => ({ ...d, streaming: false, complete: true }))
+    conn.on('chat.completed', (m: { recalledMemoryIds?: number[] }) => {
+      const recalled = m?.recalledMemoryIds ?? []
+      patchStreaming(d => ({ ...d, streaming: false, complete: true, recalled }))
       streamingKey.current = null
       setBusy(false)
-      // Refresh from the server so ids / partials are canonical.
-      getMessages(id).then(ms => setMsgs(ms.map(toUiMsg))).catch(() => {})
+      // Refresh from the server so ids / partials are canonical (keep the recalled ids
+      // — the history endpoint doesn't carry them).
+      getMessages(id).then(ms => {
+        const server = ms.map(toUiMsg)
+        setMsgs(prev => {
+          const last = prev[prev.length - 1]
+          if (last && last.recalled && last.recalled.length > 0 && server.length > 0)
+            server[server.length - 1].recalled = last.recalled
+          return server.length ? server : prev
+        })
+      }).catch(() => {})
     })
     conn.on('chat.failed', (m: { message: string }) => {
       patchStreaming(d => ({ ...d, streaming: false, complete: false, error: m.message }))
@@ -158,6 +171,10 @@ export default function Chat() {
 
   return (
     <div className="chat-wrap">
+      <div className="chat-toolbar">
+        <span className="hint">{bot.name}</span>
+        <Link to={`/bots/${id}/memories`} className="btn-ghost btn-sm">🧠 Memories</Link>
+      </div>
       <div className="chat-scroll" ref={scrollRef}>
         {msgs.map(m => (
           <div key={m.key} className={`msg ${m.role === 'User' ? 'user' : 'bot'}`}>
@@ -177,6 +194,11 @@ export default function Chat() {
                 <summary>thinking{m.reasoning.length > 200 ? ` (${m.reasoning.length})` : ''}</summary>
                 <div className="msg-reason-body">{m.reasoning}</div>
               </details>
+            )}
+            {m.role === 'Assistant' && (m.recalled?.length ?? 0) > 0 && (
+              <Link to={`/bots/${id}/memories`} className="msg-recalled">
+                🧠 remembered {m.recalled!.length} {m.recalled!.length === 1 ? 'thing' : 'things'} from your conversations — see what’s on file
+              </Link>
             )}
             {!m.complete && m.error && <span className="msg-error">{m.error}</span>}
             {!m.complete && !m.error && m.content !== '' && <span className="msg-partial">— stopped</span>}

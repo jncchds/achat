@@ -109,6 +109,32 @@ export interface InteractionDetail extends Omit<Interaction, 'purpose'> {
   failureReason: string | null
 }
 
+export interface Memory {
+  id: number
+  content: string
+  kind: 'Fact' | 'Preference' | 'Event' | 'Relationship'
+  importance: number
+  isPinned: boolean
+  source: 'Extraction' | 'UserEdited' | 'BotRemember'
+  sourceMessageId: number | null
+  supersededByMemoryId: number | null
+  isDeleted: boolean
+  createdAt: string
+  lastRecalledAt: string | null
+  recallCount: number
+}
+
+// ── Memories (§5.6) ───────────────────────────────────────────────────────────
+export const listMemories = (botId: number, search?: string) =>
+  http.get<Memory[]>('/api/memories', { params: { botId, search: search || undefined } }).then(r => r.data)
+export const updateMemory = (id: number, body: { content?: string; kind?: string; importance?: number }) =>
+  http.put<Memory>(`/api/memories/${id}`, body).then(r => r.data)
+export const pinMemory = (id: number, pinned: boolean) =>
+  http.put<Memory>(`/api/memories/${id}/pin`, { pinned }).then(r => r.data)
+export const forgetMemory = (id: number) => http.delete(`/api/memories/${id}`)
+export const forgetAllMemories = (botId: number) =>
+  http.post(`/api/bots/${botId}/memories/forget-all`)
+
 export interface ModelInfo { id: string; name: string | null }
 export interface PresetTestResult { ok: boolean; message: string }
 

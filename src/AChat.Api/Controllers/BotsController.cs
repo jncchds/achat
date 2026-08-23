@@ -8,8 +8,9 @@ using Microsoft.EntityFrameworkCore;
 namespace AChat.Api.Controllers;
 
 /// <summary>
-/// Bot CRUD + conversation timeline (§2.4, §2.3). v1: the current user's bots only —
-/// shared access lands in Phase 6.
+/// Bot CRUD + conversation timeline + sharing (§2.4, §2.3, §2.5). Bots are visible to
+/// their owner and to approved invitees; bot-admin operations (edit, delete, directives,
+/// persona, sharing) are owner-only. Sharing endpoints live under <c>{id}/share</c>.
 /// </summary>
 [ApiController]
 [Authorize]
@@ -21,7 +22,7 @@ public class BotsController(AppDbContext db) : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<BotDto>>> List()
     {
-        var bots = await _BotsBase().OrderByDescending(b => b.UpdatedAt).ToListAsync();
+        var bots = await _BotsVisible().OrderByDescending(b => b.UpdatedAt).ToListAsync();
         var last = await LastMessageByBotAsync(bots.Select(b => b.Id).ToList());
         return Ok(bots.Select(b => ToDto(b, last.GetValueOrDefault(b.Id))).ToList());
     }
@@ -43,7 +44,7 @@ public class BotsController(AppDbContext db) : ControllerBase
             .Select(kv => kv.Key)
             .ToList();
 
-        var bots = await _BotsBase().Where(b => botIds.Contains(b.Id)).ToListAsync();
+        var bots = await _BotsVisible().Where(b => botIds.Contains(b.Id)).ToListAsync();
         var byId = bots.ToDictionary(b => b.Id);
         return Ok(botIds
             .Where(byId.ContainsKey)
@@ -54,7 +55,7 @@ public class BotsController(AppDbContext db) : ControllerBase
     [HttpGet("{id:int}")]
     public async Task<ActionResult<BotDto>> Get(int id)
     {
-        var bot = await _BotsBase().FirstOrDefaultAsync(b => b.Id == id);
+        var bot = await _VisibleBotAsync(id);
         if (bot is null) return NotFound();
         var last = await LastMessageByBotAsync([id]);
         return Ok(ToDto(bot, last.GetValueOrDefault(id)));
@@ -105,7 +106,7 @@ public class BotsController(AppDbContext db) : ControllerBase
     [HttpPut("{id:int}")]
     public async Task<ActionResult<BotDto>> Update(int id, BotRequest req)
     {
-        var bot = await _BotsBase().FirstOrDefaultAsync(b => b.Id == id);
+        var bot = await _OwnedBotAsync(id);
         if (bot is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { message = "Name is required." });
@@ -132,7 +133,7 @@ public class BotsController(AppDbContext db) : ControllerBase
     [HttpGet("{id:int}/directives")]
     public async Task<ActionResult<IReadOnlyList<DirectiveDto>>> ListDirectives(int id)
     {
-        var bot = await _BotsBase().FirstOrDefaultAsync(b => b.Id == id);
+        var bot = await _OwnedBotAsync(id);
         if (bot is null) return NotFound();
         var rows = await db.BotDirectives
             .Where(d => d.BotId == id)
@@ -148,7 +149,7 @@ public class BotsController(AppDbContext db) : ControllerBase
     [HttpPost("{id:int}/directives")]
     public async Task<ActionResult<DirectiveDto>> AddDirective(int id, DirectiveRequest req)
     {
-        var bot = await _BotsBase().FirstOrDefaultAsync(b => b.Id == id);
+        var bot = await _OwnedBotAsync(id);
         if (bot is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text))
             return BadRequest(new { message = "A directive needs text." });
@@ -202,7 +203,7 @@ public class BotsController(AppDbContext db) : ControllerBase
     [HttpGet("{id:int}/persona/versions")]
     public async Task<ActionResult<IReadOnlyList<PersonaVersionDto>>> ListPersonaVersions(int id)
     {
-        var bot = await _BotsBase().FirstOrDefaultAsync(b => b.Id == id);
+        var bot = await _OwnedBotAsync(id);
         if (bot is null) return NotFound();
         var rows = await db.PersonaVersions
             .Where(v => v.BotId == id)
@@ -223,7 +224,7 @@ public class BotsController(AppDbContext db) : ControllerBase
     [HttpPut("{id:int}/persona")]
     public async Task<ActionResult<PersonaVersionDto>> EditPersona(int id, PersonaEditRequest req)
     {
-        var bot = await _BotsBase().FirstOrDefaultAsync(b => b.Id == id);
+        var bot = await _OwnedBotAsync(id);
         if (bot is null) return NotFound();
 
         var version = new PersonaVersion
@@ -250,7 +251,7 @@ public class BotsController(AppDbContext db) : ControllerBase
     [HttpPost("{id:int}/persona/versions/{vid:int}/revert")]
     public async Task<ActionResult<PersonaVersionDto>> RevertPersona(int id, int vid)
     {
-        var bot = await _BotsBase().FirstOrDefaultAsync(b => b.Id == id);
+        var bot = await _OwnedBotAsync(id);
         if (bot is null) return NotFound();
 
         var target = await db.PersonaVersions.FirstOrDefaultAsync(v => v.Id == vid && v.BotId == id);
@@ -275,7 +276,7 @@ public class BotsController(AppDbContext db) : ControllerBase
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
-        var bot = await _BotsBase().FirstOrDefaultAsync(b => b.Id == id);
+        var bot = await _OwnedBotAsync(id);
         if (bot is null) return NotFound();
         db.Bots.Remove(bot);
         await db.SaveChangesAsync();
@@ -286,7 +287,7 @@ public class BotsController(AppDbContext db) : ControllerBase
     [HttpGet("{id:int}/messages")]
     public async Task<ActionResult<IReadOnlyList<MessageDto>>> Messages(int id)
     {
-        var bot = await _BotsBase().FirstOrDefaultAsync(b => b.Id == id);
+        var bot = await _VisibleBotAsync(id);
         if (bot is null) return NotFound();
 
         var conversation = await db.Conversations
@@ -310,9 +311,182 @@ public class BotsController(AppDbContext db) : ControllerBase
         }).ToList());
     }
 
+    // ── Sharing (§2.5) — owner-only: invite code, member roster, approval queue ──
+
+    /// <summary>The owner's share view: invite code, member roster, and the pending queue (§2.5).</summary>
+    [HttpGet("{id:int}/share")]
+    public async Task<ActionResult<BotShareDto>> Share(int id)
+    {
+        var bot = await _OwnedBotAsync(id);
+        if (bot is null) return NotFound();
+        return Ok(await BuildShareDtoAsync(bot));
+    }
+
+    /// <summary>Regenerate the invite code — the old one stops working for new requests; existing grants and pending requests are untouched (§2.5).</summary>
+    [HttpPost("{id:int}/share/regenerate")]
+    public async Task<ActionResult<BotShareDto>> RegenerateInvite(int id)
+    {
+        var bot = await _OwnedBotAsync(id);
+        if (bot is null) return NotFound();
+        bot.InviteCode = Guid.NewGuid().ToString("N");
+        bot.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        return Ok(await BuildShareDtoAsync(bot));
+    }
+
+    /// <summary>Approve a pending request — creates the <see cref="BotAccess"/> grant (§2.5).</summary>
+    [HttpPost("{id:int}/share/requests/{rid:int}/approve")]
+    public async Task<ActionResult<BotShareDto>> ApproveRequest(int id, int rid)
+    {
+        var bot = await _OwnedBotAsync(id);
+        if (bot is null) return NotFound();
+
+        var req = await db.AccessRequests.FirstOrDefaultAsync(r => r.Id == rid && r.BotId == id);
+        if (req is null) return NotFound();
+        if (req.Status != AccessRequestStatus.Pending)
+            return BadRequest(new { message = "Only a pending request can be approved." });
+
+        req.Status = AccessRequestStatus.Approved;
+        req.DecidedAt = DateTime.UtcNow;
+        req.DecidedById = _userId;
+
+        // Grant access (idempotent against the (BotId, UserId) unique index).
+        var hasAccess = await db.BotAccesses.AnyAsync(a => a.BotId == id && a.UserId == req.RequesterId);
+        if (!hasAccess)
+        {
+            db.BotAccesses.Add(new BotAccess
+            {
+                BotId = id,
+                UserId = req.RequesterId,
+                Role = AccessRole.User,
+                GrantedAt = DateTime.UtcNow,
+                InviteCode = req.InviteCode,
+            });
+        }
+        await db.SaveChangesAsync();
+        return Ok(await BuildShareDtoAsync(bot));
+    }
+
+    /// <summary>Reject a pending request (§2.5). The requester may re-request later.</summary>
+    [HttpPost("{id:int}/share/requests/{rid:int}/reject")]
+    public async Task<ActionResult<BotShareDto>> RejectRequest(int id, int rid)
+    {
+        var bot = await _OwnedBotAsync(id);
+        if (bot is null) return NotFound();
+
+        var req = await db.AccessRequests.FirstOrDefaultAsync(r => r.Id == rid && r.BotId == id);
+        if (req is null) return NotFound();
+        if (req.Status != AccessRequestStatus.Pending)
+            return BadRequest(new { message = "Only a pending request can be rejected." });
+
+        req.Status = AccessRequestStatus.Rejected;
+        req.DecidedAt = DateTime.UtcNow;
+        req.DecidedById = _userId;
+        await db.SaveChangesAsync();
+        return Ok(await BuildShareDtoAsync(bot));
+    }
+
+    /// <summary>
+    /// Revoke an invitee's access. The grant is removed; their conversation and memories
+    /// are <b>retained</b>, so re-approval restores the relationship (§2.5).
+    /// </summary>
+    [HttpDelete("{id:int}/share/users/{uid:int}")]
+    public async Task<IActionResult> RevokeAccess(int id, int uid)
+    {
+        var bot = await _OwnedBotAsync(id);
+        if (bot is null) return NotFound();
+        if (uid == bot.OwnerId)
+            return BadRequest(new { message = "You are the owner — you cannot revoke yourself." });
+
+        var access = await db.BotAccesses.FirstOrDefaultAsync(a => a.BotId == id && a.UserId == uid);
+        if (access is null) return NotFound();
+        db.BotAccesses.Remove(access);
+        await db.SaveChangesAsync();
+        return NoContent();
+    }
+
+    /// <summary>Assemble the owner's share view (§2.5).</summary>
+    private async Task<BotShareDto> BuildShareDtoAsync(Bot bot)
+    {
+        var owner = await db.Users.AsNoTracking().FirstAsync(u => u.Id == bot.OwnerId);
+
+        var accessRows = await db.BotAccesses.AsNoTracking()
+            .Where(a => a.BotId == bot.Id)
+            .ToListAsync();
+        var memberIds = accessRows.Select(a => a.UserId).ToList();
+        var members = await db.Users.AsNoTracking()
+            .Where(u => memberIds.Contains(u.Id))
+            .ToDictionaryAsync(u => u.Id);
+
+        var pending = await db.AccessRequests.AsNoTracking()
+            .Where(r => r.BotId == bot.Id && r.Status == AccessRequestStatus.Pending)
+            .OrderBy(r => r.CreatedAt)
+            .ToListAsync();
+        var requesterIds = pending.Select(r => r.RequesterId).Distinct().ToList();
+        var requesters = await db.Users.AsNoTracking()
+            .Where(u => requesterIds.Contains(u.Id))
+            .ToDictionaryAsync(u => u.Id);
+
+        return new BotShareDto
+        {
+            InviteCode = bot.InviteCode,
+            Owner = new ShareMemberDto
+            {
+                UserId = owner.Id,
+                Username = owner.Username,
+                DisplayName = owner.DisplayName,
+                Role = AccessRole.Admin,
+                GrantedAt = bot.CreatedAt,
+            },
+            Members = accessRows
+                .OrderBy(a => a.GrantedAt)
+                .Where(a => members.ContainsKey(a.UserId))
+                .Select(a => new ShareMemberDto
+                {
+                    UserId = a.UserId,
+                    Username = members[a.UserId].Username,
+                    DisplayName = members[a.UserId].DisplayName,
+                    Role = a.Role,
+                    GrantedAt = a.GrantedAt,
+                })
+                .ToList(),
+            Requests = pending.Select(r => new AccessRequestDto
+            {
+                Id = r.Id,
+                BotId = r.BotId,
+                BotName = bot.Name,
+                RequesterId = r.RequesterId,
+                RequesterUsername = requesters.GetValueOrDefault(r.RequesterId)?.Username ?? "?",
+                RequesterDisplayName = requesters.GetValueOrDefault(r.RequesterId)?.DisplayName ?? "?",
+                Status = r.Status,
+                CreatedAt = r.CreatedAt,
+                DecidedAt = r.DecidedAt,
+            }).ToList(),
+        };
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────
-    private IQueryable<Bot> _BotsBase() =>
+    /// <summary>
+    /// Bots the caller may see: their own plus those shared with them via an approved
+    /// <see cref="BotAccess"/> (§2.5). Read endpoints use this; bot-admin endpoints
+    /// use <see cref="_BotsOwned"/> instead.
+    /// </summary>
+    private IQueryable<Bot> _BotsVisible() =>
+        db.Bots
+            .Include(b => b.Preset)
+            .Include(b => b.Owner)
+            .Where(b => b.OwnerId == _userId
+                || db.BotAccesses.Any(a => a.BotId == b.Id && a.UserId == _userId));
+
+    private Task<Bot?> _VisibleBotAsync(int id) =>
+        _BotsVisible().FirstOrDefaultAsync(b => b.Id == id);
+
+    /// <summary>The caller's own bots only — bot-admin operations (§2.5).</summary>
+    private IQueryable<Bot> _BotsOwned() =>
         db.Bots.Include(b => b.Preset).Where(b => b.OwnerId == _userId);
+
+    private Task<Bot?> _OwnedBotAsync(int id) =>
+        _BotsOwned().FirstOrDefaultAsync(b => b.Id == id);
 
     private static string? Blank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
@@ -356,7 +530,7 @@ public class BotsController(AppDbContext db) : ControllerBase
         return result;
     }
 
-    private static BotDto ToDto(Bot b, (DateTime LastAt, string? Preview)? last) => new()
+    private BotDto ToDto(Bot b, (DateTime LastAt, string? Preview)? last) => new()
     {
         Id = b.Id,
         Name = b.Name,
@@ -373,5 +547,7 @@ public class BotsController(AppDbContext db) : ControllerBase
         UpdatedAt = b.UpdatedAt,
         LastMessageAt = last?.LastAt,
         LastMessagePreview = last?.Preview,
+        IsOwner = b.OwnerId == _userId,
+        SharedBy = b.OwnerId == _userId ? null : b.Owner.DisplayName,
     };
 }

@@ -100,6 +100,10 @@ public sealed record BotDto
     public DateTime UpdatedAt { get; init; }
     public DateTime? LastMessageAt { get; init; }
     public string? LastMessagePreview { get; init; }
+    /// <summary>True when the caller is the creator (bot admin, §2.5).</summary>
+    public bool IsOwner { get; init; }
+    /// <summary>The creator's display name when the bot was shared with the caller.</summary>
+    public string? SharedBy { get; init; }
 }
 
 public sealed record BotRequest
@@ -183,6 +187,64 @@ public sealed record MemoryUpdateRequest
 }
 
 public sealed record MemoryPinRequest(bool Pinned);
+
+// ── Sharing (§2.5) ─────────────────────────────────────────────────────────────
+/// <summary>
+/// The owner's share view of a bot: the invite code, the member roster (owner +
+/// invitees), and the access requests in the approval queue.
+/// </summary>
+public sealed record BotShareDto
+{
+    public string InviteCode { get; init; } = "";
+    public ShareMemberDto Owner { get; init; } = null!;
+    public List<ShareMemberDto> Members { get; init; } = new();
+    public List<AccessRequestDto> Requests { get; init; } = new();
+}
+
+public sealed record ShareMemberDto
+{
+    public int UserId { get; init; }
+    public string Username { get; init; } = "";
+    public string DisplayName { get; init; } = "";
+    public AccessRole Role { get; init; }
+    public DateTime GrantedAt { get; init; }
+}
+
+public sealed record AccessRequestDto
+{
+    public int Id { get; init; }
+    public int BotId { get; init; }
+    public string? BotName { get; init; }
+    public int RequesterId { get; init; }
+    public string RequesterUsername { get; init; } = "";
+    public string RequesterDisplayName { get; init; } = "";
+    public AccessRequestStatus Status { get; init; }
+    public DateTime CreatedAt { get; init; }
+    public DateTime? DecidedAt { get; init; }
+}
+
+public sealed record AccessRequestByCode(string Code);
+
+/// <summary>
+/// The result of presenting an invite code (<c>POST /api/access/request</c>).
+/// <see cref="State"/> is "pending" (new request), "reopened" (a rejected request was
+/// re-opened), or "already" (the caller already has access — no request row).
+/// </summary>
+public sealed record AccessRequestResponseDto
+{
+    public string State { get; init; } = "";
+    public int BotId { get; init; }
+    public string BotName { get; init; } = "";
+    public AccessRequestDto? Request { get; init; }
+}
+
+/// <summary>Admin creates a user (§7.2 — no self-service registration).</summary>
+public sealed record CreateUserRequest
+{
+    public string Username { get; init; } = "";
+    public string? DisplayName { get; init; }
+    public string Password { get; init; } = "";
+}
 
 public sealed record MessageDto
 {

@@ -127,18 +127,26 @@ export default function Bots() {
             <div key={b.id} className="list-row">
               <Avatar name={b.name} url={b.avatarUrl} size="lg" />
               <div className="list-row-main">
-                <div className="list-row-title"><Link to={`/bots/${b.id}`}>{b.name}</Link></div>
+                <div className="list-row-title">
+                  <Link to={`/bots/${b.id}`}>{b.name}</Link>
+                  {b.isOwner
+                    ? <span className="pill" style={{ marginLeft: '0.5rem' }}>yours</span>
+                    : b.sharedBy && <span className="pill accent" style={{ marginLeft: '0.5rem' }}>shared by {b.sharedBy}</span>}
+                </div>
                 <div className="list-row-meta">
-                  {b.presetName} · {b.generationModel}
-                  {b.lastMessageAt ? ` · last spoke ${new Date(b.lastMessageAt).toLocaleDateString()}` : ' · not spoken yet'}
+                  {b.lastMessageAt ? `last spoke ${new Date(b.lastMessageAt).toLocaleDateString()}` : 'not spoken yet'}
                 </div>
                 {b.lastMessagePreview && <div className="list-row-meta" style={{ fontStyle: 'italic' }}>“{b.lastMessagePreview}”</div>}
               </div>
               <div className="list-row-actions">
                 <Link className="btn btn-sm" to={`/bots/${b.id}`}>Chat →</Link>
-                <Link className="btn-ghost btn-sm" to={`/bots/${b.id}/settings`}>⚙️ Personality</Link>
-                <button className="btn-ghost btn-sm" onClick={() => setEditing(b)}>Edit</button>
-                <button className="btn-danger btn-sm" onClick={() => remove(b)}>Delete</button>
+                {b.isOwner && (
+                  <>
+                    <Link className="btn-ghost btn-sm" to={`/bots/${b.id}/settings`}>⚙️ Personality</Link>
+                    <button className="btn-ghost btn-sm" onClick={() => setEditing(b)}>Edit</button>
+                    <button className="btn-danger btn-sm" onClick={() => remove(b)}>Delete</button>
+                  </>
+                )}
               </div>
             </div>
           ))}

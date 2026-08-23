@@ -58,6 +58,14 @@ export default function AppLayout() {
             </span>
           )}
         </NavLink>
+        <NavLink to="/access" className="nav-link" end>
+          {({ isActive }) => (
+            <span className={`sidebar-btn${isActive ? ' active' : ''}`}>
+              <span className="s-icon">✉</span>
+              <span className="s-label">Join a bot</span>
+            </span>
+          )}
+        </NavLink>
         {isAdmin && (
           <>
             <NavLink to="/admin" className="nav-link" end>

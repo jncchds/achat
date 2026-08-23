@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
-  addDirective, apiError, deleteDirective, editPersona, getBot, listDirectives,
-  listPersonaVersions, revertPersona, updateBot, updateDirective,
-  type Bot, type Directive, type PersonaVersion,
+  addDirective, apiError, approveRequest, deleteDirective, editPersona, getBot,
+  getBotShare, listDirectives, listPersonaVersions, regenerateInvite, rejectRequest,
+  revertPersona, revokeAccess, updateBot, updateDirective,
+  type Bot, type BotShare, type Directive, type PersonaVersion,
 } from '../api'
 
 const SOURCE_LABEL: Record<string, { text: string; cls: string }> = {
@@ -11,6 +12,117 @@ const SOURCE_LABEL: Record<string, { text: string; cls: string }> = {
   Evolution: { text: 'evolved', cls: 'pill accent' },
   UserEdited: { text: 'edited by you', cls: 'pill accent' },
   Revert: { text: 'revert', cls: 'pill' },
+}
+
+// ── Sharing (§2.5) — owner-only: invite code, members, approval queue ────────
+function MemberRow({ label, sub, tag, since, action }: {
+  label: string; sub?: string; tag?: string; since?: string; action?: React.ReactNode
+}) {
+  return (
+    <div className="row" style={{ padding: '0.4rem 0', alignItems: 'center' }}>
+      <div style={{ flex: 1 }}>
+        <b>{label}</b>{sub && <span className="hint"> ({sub})</span>}
+        {tag && <span className="pill" style={{ marginLeft: '0.5rem' }}>{tag}</span>}
+        {since && <span className="hint"> · since {since}</span>}
+      </div>
+      {action}
+    </div>
+  )
+}
+
+function SharingSection({ bot, name }: { bot: number; name: string }) {
+  const [share, setShare] = useState<BotShare | null>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const load = useCallback(() => {
+    getBotShare(bot).then(setShare).catch(e => setError(apiError(e)))
+  }, [bot])
+  useEffect(() => { load() }, [load])
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true); setError('')
+    try { await fn(); await load() } finally { setBusy(false) }
+  }
+
+  const copy = async () => {
+    if (!share) return
+    try {
+      await navigator.clipboard.writeText(share.inviteCode)
+      setCopied(true); setTimeout(() => setCopied(false), 2000)
+    } catch { setError('Could not copy automatically — select the code manually.') }
+  }
+
+  const revoke = (uid: number, who: string) => {
+    if (!confirm(`Revoke ${who}'s access?\n\nTheir conversation and memories are kept, so approving them again restores the relationship.`)) return
+    return run(() => revokeAccess(bot, uid))
+  }
+
+  if (!share) {
+    return (
+      <div className="card" style={{ marginBottom: '1rem' }}>
+        <h3 style={{ marginTop: 0 }}>Sharing</h3>
+        {error && <p className="error-msg" style={{ marginTop: 0 }}>{error}</p>}
+        <p className="hint">Loading…</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: '1rem' }}>
+      <h3 style={{ marginTop: 0 }}>Sharing — who can talk to {name}</h3>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Anyone with the code can <b>request</b> access; you approve each one. Shared users get
+        their own private conversation and memories — they cannot see yours, and you cannot
+        see theirs. The bot runs on your preset, and as its creator you can read its full
+        interaction log, including their conversations (§2.5).
+      </p>
+      {error && <p className="error-msg" style={{ marginBottom: '0.75rem' }}>{error}</p>}
+
+      <div className="row" style={{ marginBottom: '1rem', alignItems: 'center' }}>
+        <code className="mono" style={{ background: 'var(--bg-inset, rgba(127,127,127,0.12))', padding: '0.35rem 0.6rem', borderRadius: '6px', wordBreak: 'break-all', flex: 1 }}>
+          {share.inviteCode}
+        </code>
+        <button className="btn-ghost btn-sm" disabled={busy} onClick={() => void copy()}>
+          {copied ? 'Copied ✓' : 'Copy code'}
+        </button>
+        <button className="btn-ghost btn-sm danger-text" disabled={busy}
+          onClick={() => { if (confirm('Regenerate the code? The old one stops working for new requests (existing members are unaffected).')) void run(() => regenerateInvite(bot)) }}>
+          Regenerate
+        </button>
+      </div>
+
+      <h3 style={{ margin: '0 0 0.5rem' }}>Members</h3>
+      <div className="list" style={{ marginBottom: '1rem' }}>
+        <MemberRow label={share.owner.displayName} sub={share.owner.username} tag="owner" />
+        {share.members.length === 0 && <p className="hint">Just you so far — share the code above.</p>}
+        {share.members.map(m => (
+          <MemberRow key={m.userId} label={m.displayName} sub={m.username}
+            since={new Date(m.grantedAt).toLocaleDateString()}
+            action={<button className="btn-ghost btn-sm danger-text" disabled={busy}
+              onClick={() => void revoke(m.userId, m.displayName)}>Revoke</button>} />
+        ))}
+      </div>
+
+      <h3 style={{ margin: '0 0 0.5rem' }}>Pending requests</h3>
+      <div className="list" style={{ marginBottom: '0.25rem' }}>
+        {share.requests.length === 0 && <p className="hint">No one is waiting.</p>}
+        {share.requests.map(r => (
+          <div key={r.id} className="row" style={{ padding: '0.5rem 0', alignItems: 'center' }}>
+            <div style={{ flex: 1 }}>
+              <b>{r.requesterDisplayName}</b> <span className="hint">({r.requesterUsername})</span>
+              <div className="hint">requested {new Date(r.createdAt).toLocaleString()}</div>
+            </div>
+            <button className="btn-primary btn-sm" disabled={busy}
+              onClick={() => void run(() => approveRequest(bot, r.id))}>Approve</button>
+            <button className="btn-ghost btn-sm" disabled={busy}
+              onClick={() => void run(() => rejectRequest(bot, r.id))}>Reject</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 export default function BotSettings() {
@@ -305,6 +417,8 @@ export default function BotSettings() {
           </>
         )}
       </div>
+
+      {botRow.isOwner && <SharingSection bot={bot} name={botRow.name} />}
     </div>
   )
 }

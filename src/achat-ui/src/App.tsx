@@ -8,6 +8,7 @@ import Chat from './pages/Chat'
 import Presets from './pages/Presets'
 import Admin from './pages/Admin'
 import Interactions from './pages/Interactions'
+import Access from './pages/Access'
 import { AuthProvider, useAuth } from './hooks/useAuth'
 
 function Protected() {
@@ -22,6 +23,7 @@ function Protected() {
         <Route path="/bots/:botId/memories" element={<BotMemories />} />
         <Route path="/bots/:botId/settings" element={<BotSettings />} />
         <Route path="/presets" element={<Presets />} />
+        <Route path="/access" element={<Access />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="/admin/interactions" element={<Interactions />} />
         <Route path="*" element={<Navigate to="/bots" replace />} />

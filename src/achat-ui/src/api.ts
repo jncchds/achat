@@ -62,6 +62,8 @@ export interface Bot {
   updatedAt: string
   lastMessageAt: string | null
   lastMessagePreview: string | null
+  isOwner: boolean
+  sharedBy: string | null
 }
 
 export interface BotInput {
@@ -143,6 +145,70 @@ export interface Memory {
   lastRecalledAt: string | null
   recallCount: number
 }
+
+// ── Sharing (§2.5) ────────────────────────────────────────────────────────────
+
+export interface ShareMember {
+  userId: number
+  username: string
+  displayName: string
+  role: 'Admin' | 'User'
+  grantedAt: string
+}
+
+export interface AccessRequestDto {
+  id: number
+  botId: number
+  botName: string | null
+  requesterId: number
+  requesterUsername: string
+  requesterDisplayName: string
+  status: 'Pending' | 'Approved' | 'Rejected'
+  createdAt: string
+  decidedAt: string | null
+}
+
+export interface BotShare {
+  inviteCode: string
+  owner: ShareMember
+  members: ShareMember[]
+  requests: AccessRequestDto[]
+}
+
+export interface AccessRequestResponse {
+  state: 'pending' | 'reopened' | 'already'
+  botId: number
+  botName: string
+  request: AccessRequestDto | null
+}
+
+export const getBotShare = (botId: number) =>
+  http.get<BotShare>(`/api/bots/${botId}/share`).then(r => r.data)
+export const regenerateInvite = (botId: number) =>
+  http.post<BotShare>(`/api/bots/${botId}/share/regenerate`).then(r => r.data)
+export const approveRequest = (botId: number, rid: number) =>
+  http.post<BotShare>(`/api/bots/${botId}/share/requests/${rid}/approve`).then(r => r.data)
+export const rejectRequest = (botId: number, rid: number) =>
+  http.post<BotShare>(`/api/bots/${botId}/share/requests/${rid}/reject`).then(r => r.data)
+export const revokeAccess = (botId: number, uid: number) =>
+  http.delete(`/api/bots/${botId}/share/users/${uid}`)
+
+// Requester side (§2.5)
+export const requestAccessByCode = (code: string) =>
+  http.post<AccessRequestResponse>('/api/access/request', { code }).then(r => r.data)
+export const myAccessRequests = () =>
+  http.get<AccessRequestDto[]>('/api/access/requests').then(r => r.data)
+
+// ── Admin: user creation (§7.2) ─────────────────────────────────────────────
+
+export interface CreateUserInput {
+  username: string
+  displayName?: string | null
+  password: string
+}
+
+export const createUser = (u: CreateUserInput) =>
+  http.post<User>('/api/admin/users', u).then(r => r.data)
 
 // ── Memories (§5.6) ───────────────────────────────────────────────────────────
 export const listMemories = (botId: number, search?: string) =>

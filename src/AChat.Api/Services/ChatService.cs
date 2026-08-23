@@ -62,8 +62,12 @@ public sealed class ChatService
         if (content.Length == 0)
             throw new ArgumentException("Message is empty.");
 
+        // The bot is usable by its owner or by a user granted access via an approved
+        // invite code (§2.5); everyone else gets not-found, not forbidden.
         var bot = await _db.Bots.Include(b => b.Preset)
-            .FirstOrDefaultAsync(b => b.Id == botId && b.OwnerId == userId)
+            .FirstOrDefaultAsync(b => b.Id == botId
+                && (b.OwnerId == userId
+                    || _db.BotAccesses.Any(a => a.BotId == b.Id && a.UserId == userId)))
             ?? throw new KeyNotFoundException($"Bot {botId} not found for user {userId}.");
         var preset = bot.Preset;
 

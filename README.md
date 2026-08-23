@@ -99,13 +99,17 @@ node scripts/e2e/sigtest.mjs <token> <botId> "message"
 # Full browser smoke test (Playwright)
 node scripts/e2e/smoke.mjs
 
-# Phase-specific E2E — start a throwaway instance with fast worker triggers first:
+# Phase-specific E2E — start a throwaway instance with fast worker triggers first
+# (a JWT signing key >256 bits and the bootstrap admin are required):
 docker rm -f achat-e2e
 docker run -d --name achat-e2e --network achat_default -p 5002:8080 \
   -e ACHAT_ConnectionStrings__DefaultConnection="Host=postgres;Port=5432;Database=achat;Username=achat;Password=achat" \
+  -e ACHAT_Jwt__SigningKey="e2e-acht-signing-key-0123456789abcdef0123456789abcdef" \
+  -e ACHAT_BootstrapAdmin__LoginName=admin -e ACHAT_BootstrapAdmin__Password=admin \
   -e ACHAT_Evolution__MinNewMessages=6 -e ACHAT_Evolution__CooldownHours=0 \
   -e ACHAT_Extraction__MinNewMessages=2 -e ACHAT_Extraction__IdleMinutes=0 \
   achat-achat
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase6.mjs   # sharing: request → approve → separate scope
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase5.mjs   # PHASE5_PRESET=<id> picks the preset
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase5-mock.mjs  # offline (mock on 18999)
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase4.mjs
@@ -156,4 +160,9 @@ src/
   sustained conversation the bot's evolved traits changed, the next prompt carried the
   layers in order, a standing directive was obeyed, and revert restored an earlier
   version
-- Phases 6–8: see the delivery plan in `docs/design.md` §12a
+- **Phase 6 — Sharing** ✅ bot sharing: per-bot invite code, access requests + admin
+  approval queue, per-user memory scope, shared bots badged, revoke (relationship
+  retained), code regeneration, admin creates users — verified: a second user requests
+  access, is approved, holds a conversation, and the first user cannot see the second
+  user's messages or memories
+- Phases 7–8: see the delivery plan in `docs/design.md` §12a

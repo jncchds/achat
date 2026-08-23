@@ -39,10 +39,13 @@ remember specifics from far outside the context window, inspect and correct both
 remembers and every call made on their behalf, and watch its personality shift with the
 relationship.
 
-Sharing (Phase 6) and the remaining providers (Phase 7) are deliberately outside v1 — they
-widen an already-working product rather than completing it.
+Sharing (Phase 6) and the remaining providers (Phase 7) widen an already-working product
+rather than completing it, so the delivery plan (§12a) sequences them after the core.
 
-`[OPEN]` — confirm this boundary. Pulling sharing into v1 is the most likely amendment.
+`[DECIDED]` — the §12a plan is the roadmap and is being worked in order. Phase 6 (sharing)
+is now implemented: a second user can request access, be approved, and hold a conversation
+with a separate memory scope. Phases 7 (remaining providers) and 8 (operational maturity)
+remain.
 
 ---
 
@@ -100,17 +103,19 @@ the bot behaves; only what it knows about them.
 This gives a clean split, worth stating explicitly because it drives the whole prompt
 assembly in §5.4: **persona is global to the bot, memory is local to the relationship.**
 
-`[OPEN]` — remaining sharing details:
+`[DECIDED]` (Phase 6) — remaining sharing details:
 
-1. **Who pays.** The bot runs on the admin's preset, so an invitee's conversations consume the
-   admin's API key and quota. Presumed intended. Do admins get per-user usage visibility,
-   quotas, or a kill switch?
-2. **Privacy vs. the interaction log.** §4.4 stores full request and response text for every
-   call, and those calls run on the admin's preset. If the admin can browse the interaction
-   log for their own bot, they can read every invitee's conversation regardless of what the
-   chat UI exposes. Either scope the log viewer to system admins only, or state plainly on
-   the invite screen that the bot admin can see conversations. Do not imply a confidentiality
-   the architecture does not provide.
+1. **Who pays.** The bot runs on the creator's preset, so an invitee's conversations consume
+   the creator's API key and quota. Presumed intended and stated on the access screen.
+   Per-user usage visibility, quotas, and a kill switch are Phase 8 (§12a).
+2. **Privacy vs. the interaction log.** §4.4 stores full request/response text and runs on the
+   creator's key, so anyone who can read it can read every invitee's conversation. v1 therefore
+   **scopes the log viewer to system admins only** (the `IsAdmin` role — in the typical
+   self-hosted deployment, the creator); invitees cannot open it. The access screen states
+   plainly that **the bot's creator can see this bot's full interaction log, including your
+   conversations**, so no confidentiality the architecture does not provide is implied.
+   Scoping the log to "the bot's owner" rather than "system admin" is a Phase 8 refinement
+   once owners and system admins can differ.
 **Invite codes** `[DECIDED]` — one code per bot, a GUID, assigned once at creation and stable
 thereafter. It is a **request token, not a grant**:
 
@@ -124,18 +129,28 @@ The code being permanent is safe precisely because it only opens a request: a le
 costs the admin a rejection, not an unwanted user. It also means no expiry logic, no reissue
 flow, and no single-use bookkeeping — the approval step carries all the security.
 
-`[OPEN]` — remaining sharing details:
+`[DECIDED]` (Phase 6) — remaining sharing details:
 
-3. Can the admin **regenerate** a bot's code if it leaks widely enough to be a nuisance?
-4. **Revocation.** Does revoking access delete that user's conversation and memories, or
-   retain them so re-approval restores the relationship? (Retention is friendlier; deletion is
-   the stronger privacy answer.)
-5. **Re-sharing.** Anyone can pass the code along, since it is just a string — but only the
-   admin approves. This seems correct; confirm.
-6. **Visibility.** Is a shared bot badged in the invitee's list, or indistinguishable from
-   their own?
-7. **Deletion.** What happens to invitees when the admin deletes the bot or their account?
-8. Does a rejected user get told, and can they request again?
+3. **Code regeneration.** Yes. The admin can regenerate a bot's code at will (a leaked code
+   only costs a rejection, but regeneration is the cheap escape hatch). Regenerating invalidates
+   the old code for *new* requests; existing grants and pending requests are untouched.
+4. **Revocation — retain.** Revoking a user deletes their `BotAccess` row only; their
+   conversation and memories are **retained**, so re-approval restores the relationship
+   intact. Deleting an invitee's data on revoke is the stronger privacy answer but is friendlier
+   as an opt-out later; v1 retains.
+5. **Re-sharing — confirmed.** Anyone can pass the code along (it is a string); only the admin
+   approves. Correct as designed — the approval step carries all the security.
+6. **Visibility — badged.** A shared bot is badged in the invitee's list ("shared by
+   {creator}"), and the owner's own bots carry an "owner" affordance. `BotDto` gains
+   `isOwner` and `sharedBy`.
+7. **Deletion cascade.** Deleting a bot cascades to all invitee access, conversations, and
+   memories (the bot no longer exists) — inherent and correct. Deleting a user cascades to
+   their `BotAccess` rows and, per the `LlmInteraction` `Restrict` FK, is blocked while they
+   have logged interactions (a Phase 8 user-management concern).
+8. **Rejected users.** No push-notification system in v1, so a user is not actively told — but
+   the status of their own request (pending / approved / rejected) is always visible on the
+   access screen, and a **rejected** user may request again (re-submitting the code re-opens
+   their request as pending). One live request per `(bot, user)` is enforced.
 
 ### 2.3 Conversation shape `[DECIDED]`
 
@@ -1197,7 +1212,8 @@ creator, the admin can read the version history, and revert works.
 `BotAccess`, per-bot invite GUID, access requests and the admin approval queue (§2.5).
 Per-user memory scoping is already in place from Phase 4 — this phase adds the second user
 that makes it matter, plus the authorization rules and the privacy decisions around the
-Phase 2 log viewer.
+Phase 2 log viewer. A prerequisite: an admin creates the second user (no self-service
+registration, §7.2) — minimal user creation lands here, full user management in Phase 8.
 
 *Done when*: a second user can request access, be approved, and hold a conversation with a
 separate memory scope that the first user cannot see.
@@ -1239,11 +1255,14 @@ this document stays the spec (§11a).
 **Still open, roughly by weight:**
 
 1. Review the §12a phase ordering (Phases 0–5 are done; 6–8 remain).
-2. Remaining sharing details: cost visibility, revocation semantics, code regeneration, and
-   who may read the interaction log for a shared bot. (§2.5)
+2. Sharing — *resolved in Phase 6* (§2.5): log viewer scoped to system admins (creator),
+   invitees told the creator can read the log · revocation retains the relationship ·
+   code regeneration allowed · shared bots badged · one live request per (bot, user),
+   rejected users may re-request. Cost visibility / quotas remain Phase 8.
 3. Message editing, deletion, and regeneration; group chats. (§2.3)
 4. Onboarding — what a bot knows at the first message of a new relationship. (§5.10.4)
 5. Bot reassignment to a preset with a different embedding model: block, or re-embed? (§5.7)
 6. Whether variable-length embeddings need an indexing strategy at AChat's row counts. (§6)
 7. Tuning the ranking/extraction/evolution constants against real conversations — all
    currently first guesses, all in config.
+8. Admin user management beyond creation (disable / reset / delete) — Phase 8 (§7.4).

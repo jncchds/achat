@@ -98,6 +98,8 @@ public sealed record BotDto
     public LlmProvider Provider { get; init; }
     public string GenerationModel { get; init; } = "";
     public bool EvolutionEnabled { get; init; }
+    /// <summary>Creator's choice: show the model's chain of thought in chat (§2.5). Default off.</summary>
+    public bool ShowThinking { get; init; }
     public DateTime CreatedAt { get; init; }
     public DateTime UpdatedAt { get; init; }
     public DateTime? LastMessageAt { get; init; }
@@ -118,6 +120,8 @@ public sealed record BotSettingsRequest
     public bool? Suspended { get; init; }
     /// <summary>New quota cap in interactions; 0 = unlimited. Null = unchanged.</summary>
     public int? MaxInteractions { get; init; }
+    /// <summary>Show the model's chain of thought in chat (§2.5). Null = unchanged.</summary>
+    public bool? ShowThinking { get; init; }
 }
 
 /// <summary>Per-user usage breakdown within a bot's total (§2.5 — who is spending the creator's key).</summary>

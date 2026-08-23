@@ -231,6 +231,93 @@ public class Phase8Tests
     }
 
     [Fact]
+    public async Task Owner_can_toggle_show_thinking_and_it_surfaces_in_the_dto()
+    {
+        var f = new Fixture();
+        f.Db.Bots.Add(new Bot
+        {
+            Id = 9, OwnerId = f.AdminId, Name = "Bot", CorePersona = "x",
+            InviteCode = "c", PresetId = 1, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        await f.Db.SaveChangesAsync();
+
+        // Default: off.
+        var bot = await f.Db.Bots.FirstAsync(b => b.Id == 9);
+        Assert.False(bot.ShowThinking);
+
+        var owner = WithUser(new BotsController(f.Db), f.AdminId);
+        var res = await owner.UpdateSettings(9, new BotSettingsRequest { ShowThinking = true });
+        Assert.IsType<OkObjectResult>(res.Result);
+        Assert.True(((OkObjectResult)res.Result!).Value is BotDto dto && dto.ShowThinking);
+        Assert.True((await f.Db.Bots.FirstAsync(b => b.Id == 9)).ShowThinking);
+
+        // Back off — null in the request must not clobber the other settings.
+        await owner.UpdateSettings(9, new BotSettingsRequest { ShowThinking = false });
+        bot = await f.Db.Bots.FirstAsync(b => b.Id == 9);
+        Assert.False(bot.ShowThinking);
+        Assert.False(bot.Suspended);
+        Assert.Null(bot.MaxInteractions);
+    }
+
+    [Fact]
+    public async Task Invitee_cannot_toggle_show_thinking()
+    {
+        var f = new Fixture();
+        f.Db.Bots.Add(new Bot
+        {
+            Id = 9, OwnerId = f.AdminId, Name = "Bot", CorePersona = "x",
+            InviteCode = "c", PresetId = 1, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        await f.Db.SaveChangesAsync();
+
+        var invitee = WithUser(new BotsController(f.Db), f.UserId);
+        var res = await invitee.UpdateSettings(9, new BotSettingsRequest { ShowThinking = true });
+        Assert.IsType<NotFoundResult>(res.Result); // not the creator
+        Assert.False((await f.Db.Bots.FirstAsync(b => b.Id == 9)).ShowThinking);
+    }
+
+    [Fact]
+    public async Task Messages_hide_reasoning_by_default_and_return_it_when_the_creator_enables_it()
+    {
+        var f = new Fixture();
+        f.Db.Bots.Add(new Bot
+        {
+            Id = 9, OwnerId = f.AdminId, Name = "Bot", CorePersona = "x",
+            InviteCode = "c", PresetId = 1, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        var conv = new Conversation
+        {
+            Id = 1, BotId = 9, UserId = f.AdminId,
+            CreatedAt = DateTime.UtcNow, LastMessageAt = DateTime.UtcNow,
+        };
+        f.Db.Conversations.Add(conv);
+        f.Db.Messages.Add(new Message
+        {
+            Id = 1, Conversation = conv, Role = MessageRole.Assistant,
+            Content = "hi", Reasoning = "internal chain of thought", IsComplete = true, CreatedAt = DateTime.UtcNow,
+        });
+        await f.Db.SaveChangesAsync();
+
+        var owner = WithUser(new BotsController(f.Db), f.AdminId);
+
+        // Off by default → the reasoning stays server-side…
+        var res = await owner.Messages(9);
+        Assert.IsType<OkObjectResult>(res.Result);
+        var hidden = Assert.IsAssignableFrom<IReadOnlyList<MessageDto>>(((OkObjectResult)res.Result!).Value!);
+        Assert.Null(hidden[0].Reasoning);
+
+        // …even though the row keeps it (§4.4).
+        Assert.Equal("internal chain of thought",
+            (await f.Db.Messages.FirstAsync(m => m.Id == 1)).Reasoning);
+
+        // Creator enables it → the timeline now carries it.
+        await owner.UpdateSettings(9, new BotSettingsRequest { ShowThinking = true });
+        res = await owner.Messages(9);
+        var shown = Assert.IsAssignableFrom<IReadOnlyList<MessageDto>>(((OkObjectResult)res.Result!).Value!);
+        Assert.Equal("internal chain of thought", shown[0].Reasoning);
+    }
+
+    [Fact]
     public async Task Usage_endpoint_reports_totals_and_per_user_breakdown()
     {
         var f = new Fixture();

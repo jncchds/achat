@@ -65,6 +65,10 @@ public sealed class ChatService
         var bot = await ResolveBotAsync(botId, userId);
         await EnsureUsableAsync(bot);
 
+        // The chain of thought is relayed only when the creator enabled it (§2.5).
+        // It is always persisted and logged (§4.4) — this controls display only.
+        var reasoning = bot.ShowThinking ? onReasoningDelta : _ => Task.CompletedTask;
+
         // ── Timeline: one continuous conversation per (bot, user) (§2.3) ────────
         var conversation = await _db.Conversations
             .FirstOrDefaultAsync(c => c.BotId == botId && c.UserId == userId);
@@ -95,7 +99,7 @@ public sealed class ChatService
         if (onStart is not null) await onStart(userMessage.Id);
 
         return await RunGenerationAsync(bot, userId, conversation, userMessage,
-            onContentDelta, onReasoningDelta, ct);
+            onContentDelta, reasoning, ct);
     }
 
     /// <summary>
@@ -122,6 +126,9 @@ public sealed class ChatService
     {
         var bot = await ResolveBotAsync(botId, userId);
         await EnsureUsableAsync(bot);
+
+        // Same display rule as a fresh turn (§2.5).
+        var reasoning = bot.ShowThinking ? onReasoningDelta : _ => Task.CompletedTask;
 
         var conversation = await _db.Conversations
             .FirstOrDefaultAsync(c => c.BotId == botId && c.UserId == userId)
@@ -161,7 +168,7 @@ public sealed class ChatService
         if (onStart is not null) await onStart(target.Id);
 
         return await RunGenerationAsync(bot, userId, conversation, target,
-            onContentDelta, onReasoningDelta, ct);
+            onContentDelta, reasoning, ct);
     }
 
     /// <summary>

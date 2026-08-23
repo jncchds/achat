@@ -59,6 +59,7 @@ export interface Bot {
   provider: Provider
   generationModel: string
   evolutionEnabled: boolean
+  showThinking: boolean
   createdAt: string
   updatedAt: string
   lastMessageAt: string | null
@@ -244,7 +245,7 @@ export interface BotUsage {
   byUser: BotUserUsage[]
 }
 
-export const updateBotSettings = (id: number, s: { suspended?: boolean; maxInteractions?: number }) =>
+export const updateBotSettings = (id: number, s: { suspended?: boolean; maxInteractions?: number; showThinking?: boolean }) =>
   http.patch<Bot>(`/api/bots/${id}/settings`, s).then(r => r.data)
 export const getBotUsage = (id: number) =>
   http.get<BotUsage>(`/api/bots/${id}/usage`).then(r => r.data)

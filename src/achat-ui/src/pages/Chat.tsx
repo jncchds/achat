@@ -228,7 +228,6 @@ export default function Chat() {
               </Link>
             )}
             {!m.complete && m.error && <span className="msg-error">{m.error}</span>}
-            {!m.complete && !m.error && m.content !== '' && <span className="msg-partial">— stopped</span>}
             {m.role === 'Assistant' && !m.complete && m.key === lastKey && !busy && (
               <div style={{ marginTop: '0.5rem' }}>
                 <button className="btn-ghost btn-sm" onClick={retryLast} aria-label="Try again — re-run this turn">

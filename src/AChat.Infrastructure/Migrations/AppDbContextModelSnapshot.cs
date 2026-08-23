@@ -116,6 +116,9 @@ namespace AChat.Infrastructure.Migrations
                     b.Property<int>("PresetId")
                         .HasColumnType("integer");
 
+                    b.Property<bool>("ShowThinking")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("SpeechStyle")
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)");

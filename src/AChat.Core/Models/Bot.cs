@@ -42,6 +42,14 @@ public class Bot
     public bool EvolutionEnabled { get; set; } = true;
 
     /// <summary>
+    /// Whether the model's chain of thought is surfaced in the chat as a
+    /// "thinking" block (§2.5). Set by the creator. Off by default — raw
+    /// reasoning is a debugging aid, not reading material. The reasoning is
+    /// always persisted and logged (§4.4); this only controls display.
+    /// </summary>
+    public bool ShowThinking { get; set; }
+
+    /// <summary>
     /// Watermark for evolution (§2.4): the highest message Id (across the
     /// creator's conversations) already considered by a completed evolution pass.
     /// Null = nothing processed yet. Only the creator's messages count.

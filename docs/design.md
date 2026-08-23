@@ -89,6 +89,12 @@ This makes `Bot` a shared resource and introduces a join entity — call it `Bot
 | **Bot admin** | The creator, exactly one | Everything a user can, plus: edit personality, choose the preset, issue and revoke invite codes, delete the bot |
 | **User** | Everyone who redeems an invite code | Talk to the bot; see and manage *their own* memories and conversation |
 
+**Chain-of-thought display is creator-configured** `[DECIDED]` — `Bot.ShowThinking`
+(default **off**) controls whether the model's reasoning appears in the chat as a
+collapsible *thinking* block. When off, the reasoning is still persisted on the message
+and in the interaction log (§4.4); only the display is suppressed — in the timeline
+payload and in the live stream. Invitees never see it unless the creator switches it on.
+
 The creator is simultaneously the bot admin **and** its default user — they have their own
 `(BotId, UserId)` memory scope like anyone else.
 
@@ -1257,9 +1263,11 @@ and pruning (§4.4), retry and failure-handling policy (§4.5), health checks, n
 container, accessibility pass, backup guidance.
 
 *Done when*: an admin can disable / reset / delete a user (with self-lockout and audit-log
-guards); a bot owner can pause a bot (kill switch), cap its usage (quota), and see exactly
-who is spending the key; the audit log prunes itself on a retention window; transient LLM
-failures are retried with backoff; the container runs as a non-root user. **Shipped.**
+guards); a bot owner can pause a bot (kill switch), cap its usage (quota), see exactly
+who is spending the key, and decide whether the bot's chain of thought is shown in chat
+(`ShowThinking`, off by default); the audit log prunes itself on a retention window;
+transient LLM failures are retried with backoff; the container runs as a non-root user.
+**Shipped.**
 
 ### Later, explicitly not v1
 

@@ -147,6 +147,7 @@ public class BotsController(AppDbContext db) : ControllerBase
             if (cap < 0) return BadRequest(new { message = "Quota must be 0 (unlimited) or a positive number of interactions." });
             bot.MaxInteractions = cap == 0 ? null : cap;
         }
+        if (req.ShowThinking is { } show) bot.ShowThinking = show;
         bot.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
         var last = await LastMessageByBotAsync([id]);
@@ -381,12 +382,14 @@ public class BotsController(AppDbContext db) : ControllerBase
             .ThenBy(m => m.Id)
             .ToListAsync();
 
+        // The chain of thought is shown only when the creator enabled it (§2.5);
+        // the row itself always keeps it (§4.4 — the log is the debugging surface).
         return Ok(messages.Select(m => new MessageDto
         {
             Id = m.Id,
             Role = m.Role,
             Content = m.Content,
-            Reasoning = m.Reasoning,
+            Reasoning = bot.ShowThinking ? m.Reasoning : null,
             IsComplete = m.IsComplete,
             CreatedAt = m.CreatedAt,
         }).ToList());
@@ -624,6 +627,7 @@ public class BotsController(AppDbContext db) : ControllerBase
         Provider = b.Preset.Provider,
         GenerationModel = b.Preset.GenerationModel,
         EvolutionEnabled = b.EvolutionEnabled,
+        ShowThinking = b.ShowThinking,
         CreatedAt = b.CreatedAt,
         UpdatedAt = b.UpdatedAt,
         LastMessageAt = last?.LastAt,

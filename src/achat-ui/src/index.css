@@ -941,8 +941,6 @@ button:disabled:hover { background: var(--accent); }
 .msg-reason .msg-reason-body { padding: 0.4rem 0.6rem; white-space: pre-wrap; line-height: 1.5; }
 
 .msg-error { align-self: center; font-size: 0.82rem; color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent); padding: 0.35rem 0.8rem; border-radius: 8px; }
-.msg-partial { font-size: 0.72rem; color: var(--warning); margin-top: 0.15rem; }
-
 .chat-input-bar { padding: 0.75rem 0.5rem 1rem; display: flex; gap: 0.5rem; align-items: flex-end; }
 .chat-input {
   flex: 1; resize: none; max-height: 160px; min-height: 2.4rem;

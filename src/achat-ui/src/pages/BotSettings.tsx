@@ -311,6 +311,11 @@ export default function BotSettings() {
     }))
   }
 
+  const toggleThinking = (on: boolean) => {
+    if (!botRow) return
+    return run(() => updateBotSettings(bot, { showThinking: on }))
+  }
+
   // ── directives ────────────────────────────────────────────────────────────
   const addDir = () => {
     const text = newDirective.trim()
@@ -396,6 +401,24 @@ export default function BotSettings() {
                 A background pass rewrites the evolved-traits layer when your conversation
                 has produced enough new material (slow cadence — personality that shifts
                 hourly is noise, not character). Only your conversations shape them.
+              </div>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      {/* ── chat display: thinking blocks ── */}
+      <div className="card" style={{ marginBottom: '1rem' }}>
+        <div className="row">
+          <label className="check-row">
+            <input type="checkbox" checked={botRow.showThinking} disabled={busy}
+              onChange={e => void toggleThinking(e.target.checked)} />
+            <span>
+              <b>Show thinking</b>
+              <div className="hint">
+                Show the model's raw chain of thought as a collapsible block above each
+                reply. Off by default — it's a debugging aid, not reading material. The
+                reasoning is always kept in the interaction log (§4.4).
               </div>
             </span>
           </label>

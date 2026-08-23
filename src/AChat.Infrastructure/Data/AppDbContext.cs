@@ -48,6 +48,7 @@ public class AppDbContext : DbContext, IDataProtectionKeyContext
             u.Property(x => x.PasswordHash).HasMaxLength(512).IsRequired();
             u.Property(x => x.Timezone).HasMaxLength(64);
             u.Property(x => x.IsAdmin).HasDefaultValue(false);
+            u.Property(x => x.IsActive).HasDefaultValue(true);
         });
 
         // ── LlmPreset ─────────────────────────────────────────────────────────
@@ -80,6 +81,7 @@ public class AppDbContext : DbContext, IDataProtectionKeyContext
             // A bot uses exactly one preset, which must belong to the same owner (§2.2).
             b.HasOne(x => x.Preset).WithMany().HasForeignKey(x => x.PresetId).OnDelete(DeleteBehavior.Restrict);
             b.Property(x => x.EvolutionEnabled).HasDefaultValue(true);
+            b.Property(x => x.Suspended).HasDefaultValue(false);
         });
 
         // ── BotDirective: discrete, individually editable directives (§2.4) ────

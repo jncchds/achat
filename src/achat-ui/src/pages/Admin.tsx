@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { apiError, createUser, listUsers, type User } from '../api'
+import {
+  apiError, createUser, deleteUser, listUsers, resetUserPassword, setUserActive,
+  getStoredUser, type User,
+} from '../api'
 
 export default function Admin() {
   const [users, setUsers] = useState<User[]>([])
@@ -7,11 +10,14 @@ export default function Admin() {
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
   const [nu, setNu] = useState({ username: '', displayName: '', password: '' })
+  const selfId = getStoredUser()?.id ?? null
 
   const load = useCallback(() => {
     listUsers().then(setUsers).catch(e => setError(apiError(e)))
   }, [])
   useEffect(() => { load() }, [load])
+
+  const flash = (m: string) => { setMsg(m); setError(''); setTimeout(() => setMsg(''), 6000) }
 
   const addUser = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -24,9 +30,48 @@ export default function Admin() {
         password: nu.password,
       })
       setNu({ username: '', displayName: '', password: '' })
-      setMsg('User created. They can now sign in and request to join a bot.')
+      flash('User created. They can now sign in and request to join a bot.')
       load()
     } catch (err) { setError(apiError(err)) } finally { setBusy(false) }
+  }
+
+  const toggleActive = async (u: User) => {
+    const next = !u.isActive
+    if (next) {
+      // enabling is safe
+    } else {
+      if (!window.confirm(`Disable ${u.username}? They will be signed out of new work and cannot log in until re-enabled. Their bots and data are kept.`))
+        return
+    }
+    setError('')
+    try {
+      await setUserActive(u.id, next)
+      flash(next ? `${u.username} re-enabled.` : `${u.username} disabled — they can no longer sign in.`)
+      load()
+    } catch (err) { setError(apiError(err)) }
+  }
+
+  const resetPassword = async (u: User) => {
+    const pw = window.prompt(`Set a new password for ${u.username} (min 4 characters):`, '')
+    if (pw === null) return
+    if (pw.length < 4) { setError('Password must be at least 4 characters.'); return }
+    setError('')
+    try {
+      await resetUserPassword(u.id, pw)
+      flash(`Password reset for ${u.username}. Share it securely.`)
+    } catch (err) { setError(apiError(err)) }
+  }
+
+  const remove = async (u: User) => {
+    if (!window.confirm(
+      `Delete ${u.username}? This cannot be undone. Users who own bots or have logged interactions cannot be deleted — disable them instead.`,
+    )) return
+    setError('')
+    try {
+      await deleteUser(u.id)
+      flash(`${u.username} deleted.`)
+      load()
+    } catch (err) { setError(apiError(err)) }
   }
 
   return (
@@ -34,13 +79,15 @@ export default function Admin() {
       <div className="page-header">
         <h2>Admin</h2>
       </div>
-      {error && <p className="error-msg" style={{ marginBottom: '1rem' }}>{error}</p>}
+      {error && <p className="error-msg" role="alert" style={{ marginBottom: '1rem' }}>{error}</p>}
+      {msg && <p className="hint" role="status" style={{ marginBottom: '1rem' }}>{msg}</p>}
+
       <h3 style={{ marginBottom: '0.75rem' }}>Create a user</h3>
       <p className="hint" style={{ marginTop: 0 }}>
         There is no self-service sign-up (§7.2) — an admin creates each user. Share their
         invite code for a bot from that bot's personality page.
       </p>
-      <form onSubmit={addUser} className="row" style={{ alignItems: 'flex-end', marginBottom: '0.5rem' }}>
+      <form onSubmit={addUser} className="row" style={{ alignItems: 'flex-end', marginBottom: '1rem' }}>
         <label style={{ flex: '1 1 12rem' }}>Username
           <input value={nu.username} onChange={e => setNu({ ...nu, username: e.target.value })} required />
         </label>
@@ -54,7 +101,6 @@ export default function Admin() {
           {busy ? 'Creating…' : 'Create user'}
         </button>
       </form>
-      {msg && <p className="hint" style={{ marginBottom: '1rem' }}>{msg}</p>}
 
       <h3 style={{ marginBottom: '0.75rem' }}>Users</h3>
       <div className="table-wrap">
@@ -64,27 +110,58 @@ export default function Admin() {
               <th>Username</th>
               <th>Display name</th>
               <th>Role</th>
+              <th>Status</th>
               <th>Timezone</th>
-              <th>Created</th>
               <th>Last login</th>
+              <th aria-label="Actions" />
             </tr>
           </thead>
           <tbody>
-            {users.map(u => (
-              <tr key={u.id}>
-                <td className="mono">{u.username}</td>
-                <td>{u.displayName}</td>
-                <td>{u.isAdmin ? <span className="pill">admin</span> : <span className="pill neutral">user</span>}</td>
-                <td>{u.timezone ?? '—'}</td>
-                <td>{new Date(u.createdAt).toLocaleDateString()}</td>
-                <td>{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : 'never'}</td>
-              </tr>
-            ))}
+            {users.map(u => {
+              const isSelf = u.id === selfId
+              return (
+                <tr key={u.id} aria-disabled={!u.isActive}>
+                  <td className="mono">{u.username}{isSelf && <span className="hint"> (you)</span>}</td>
+                  <td>{u.displayName}</td>
+                  <td>{u.isAdmin ? <span className="pill">admin</span> : <span className="pill neutral">user</span>}</td>
+                  <td>
+                    {u.isActive
+                      ? <span className="pill neutral">active</span>
+                      : <span className="pill danger">disabled</span>}
+                  </td>
+                  <td>{u.timezone ?? '—'}</td>
+                  <td>{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : 'never'}</td>
+                  <td>
+                    <div className="row" style={{ justifyContent: 'flex-end', gap: '0.25rem' }}>
+                      <button
+                        className="btn-ghost"
+                        disabled={isSelf && !u.isActive}
+                        onClick={() => toggleActive(u)}
+                        title={isSelf && !u.isActive ? 'You cannot re-enable yourself from here' : (u.isActive ? 'Disable' : 'Enable')}
+                      >
+                        {u.isActive ? 'Disable' : 'Enable'}
+                      </button>
+                      <button className="btn-ghost" onClick={() => resetPassword(u)} title={`Reset password`}>
+                        Reset
+                      </button>
+                      {!isSelf && (
+                        <button className="btn-danger" onClick={() => remove(u)} title="Delete user">
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
       <p className="hint" style={{ marginTop: '1rem' }}>
-        User management (disable / reset / delete) lands in Phase 8. The bootstrap admin is created from <span className="mono">BootstrapAdmin</span> settings on first run (§7.2).
+        Disabling is the safe, reversible control — the account is refused at login and on every
+        request, but their bots and data are kept (§7.4). Deleting a user who owns bots or has
+        logged interactions is blocked; disable them instead. The bootstrap admin is created from
+        <span className="mono"> BootstrapAdmin</span> settings on first run (§7.2).
       </p>
     </div>
   )

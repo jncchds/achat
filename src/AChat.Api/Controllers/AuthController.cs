@@ -22,6 +22,11 @@ public class AuthController(AppDbContext db, PasswordHasher hasher, JwtTokenServ
         if (user is null || !hasher.Verify(req.Password, user.PasswordHash))
             return Unauthorized(new { message = "Invalid username or password." });
 
+        // A disabled account is refused outright (§7.4) — a distinct 403 so the UI
+        // can say "this account is disabled" rather than "wrong password".
+        if (!user.IsActive)
+            return StatusCode(403, new { message = "This account has been disabled by an administrator." });
+
         user.LastLoginAt = DateTime.UtcNow;
         if (TryValidTimezone(req.Timezone, out var tz))
             user.Timezone = tz;

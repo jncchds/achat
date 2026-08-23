@@ -10,6 +10,7 @@ export interface User {
   username: string
   displayName: string
   isAdmin: boolean
+  isActive: boolean
   timezone: string | null
   createdAt: string
   lastLoginAt: string | null
@@ -64,6 +65,8 @@ export interface Bot {
   lastMessagePreview: string | null
   isOwner: boolean
   sharedBy: string | null
+  suspended: boolean
+  maxInteractions: number | null
 }
 
 export interface BotInput {
@@ -199,7 +202,7 @@ export const requestAccessByCode = (code: string) =>
 export const myAccessRequests = () =>
   http.get<AccessRequestDto[]>('/api/access/requests').then(r => r.data)
 
-// ── Admin: user creation (§7.2) ─────────────────────────────────────────────
+// ── Admin: user management (§7.2, §7.4) ──────────────────────────────────────
 
 export interface CreateUserInput {
   username: string
@@ -209,6 +212,42 @@ export interface CreateUserInput {
 
 export const createUser = (u: CreateUserInput) =>
   http.post<User>('/api/admin/users', u).then(r => r.data)
+export const setUserActive = (id: number, isActive: boolean) =>
+  http.patch<User>(`/api/admin/users/${id}`, { isActive }).then(r => r.data)
+export const resetUserPassword = (id: number, password: string) =>
+  http.post<User>(`/api/admin/users/${id}/reset-password`, { password }).then(r => r.data)
+export const deleteUser = (id: number) => http.delete(`/api/admin/users/${id}`)
+
+// ── Usage controls (§12a, §2.5) ──────────────────────────────────────────────
+
+export interface BotUserUsage {
+  userId: number
+  username: string
+  displayName: string
+  isOwner: boolean
+  interactions: number
+  promptTokens: number
+  completionTokens: number
+}
+
+export interface BotUsage {
+  botId: number
+  botName: string
+  interactions: number
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  maxInteractions: number | null
+  suspended: boolean
+  firstInteractionAt: string | null
+  lastInteractionAt: string | null
+  byUser: BotUserUsage[]
+}
+
+export const updateBotSettings = (id: number, s: { suspended?: boolean; maxInteractions?: number }) =>
+  http.patch<Bot>(`/api/bots/${id}/settings`, s).then(r => r.data)
+export const getBotUsage = (id: number) =>
+  http.get<BotUsage>(`/api/bots/${id}/usage`).then(r => r.data)
 
 // ── Memories (§5.6) ───────────────────────────────────────────────────────────
 export const listMemories = (botId: number, search?: string) =>

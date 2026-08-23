@@ -7,6 +7,7 @@ using AChat.Infrastructure.Data;
 using AChat.Infrastructure.Llm;
 using AChat.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -61,7 +62,16 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             },
         };
     });
-builder.Services.AddAuthorization();
+// Authorization: require an authenticated, *active* user by default (§7.4). A
+// disabled account is refused on every authorized request, not just at login.
+builder.Services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, ActiveUserAuthorizationHandler>();
+builder.Services.AddAuthorization(options =>
+{
+    options.DefaultPolicy = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .AddRequirements(new ActiveUserRequirement())
+        .Build();
+});
 
 // ── Shared JSON: enums as strings, cycles ignored (shared by MVC + SignalR) ────
 void ConfigureJsonSerializer(System.Text.Json.JsonSerializerOptions opts)
@@ -87,6 +97,9 @@ builder.Services.AddHostedService<MemoryExtractionService>();
 
 // ── Personality evolution (§2.4) — slow background worker, never in the request path
 builder.Services.AddHostedService<PersonaEvolutionService>();
+
+// ── Interaction-log retention (§4.4, Phase 8) — periodic pruning of the audit log
+builder.Services.AddHostedService<InteractionRetentionService>();
 
 // ── API ─────────────────────────────────────────────────────────────────────────
 builder.Services.AddControllers()

@@ -17,6 +17,7 @@ public sealed record UserDto
     public string Username { get; init; } = "";
     public string DisplayName { get; init; } = "";
     public bool IsAdmin { get; init; }
+    public bool IsActive { get; init; } = true;
     public string? Timezone { get; init; }
     public DateTime CreatedAt { get; init; }
     public DateTime? LastLoginAt { get; init; }
@@ -27,6 +28,7 @@ public sealed record UserDto
         Username = u.Username,
         DisplayName = u.DisplayName,
         IsAdmin = u.IsAdmin,
+        IsActive = u.IsActive,
         Timezone = u.Timezone,
         CreatedAt = u.CreatedAt,
         LastLoginAt = u.LastLoginAt,
@@ -104,6 +106,49 @@ public sealed record BotDto
     public bool IsOwner { get; init; }
     /// <summary>The creator's display name when the bot was shared with the caller.</summary>
     public string? SharedBy { get; init; }
+    /// <summary>Kill switch — the creator has paused this bot (§12a, §2.5).</summary>
+    public bool Suspended { get; init; }
+    /// <summary>Usage quota cap in interactions; null/0 = unlimited (§12a, §2.5).</summary>
+    public int? MaxInteractions { get; init; }
+}
+
+/// <summary>Owner's settings for usage controls (partial update — null = unchanged).</summary>
+public sealed record BotSettingsRequest
+{
+    public bool? Suspended { get; init; }
+    /// <summary>New quota cap in interactions; 0 = unlimited. Null = unchanged.</summary>
+    public int? MaxInteractions { get; init; }
+}
+
+/// <summary>Per-user usage breakdown within a bot's total (§2.5 — who is spending the creator's key).</summary>
+public sealed record BotUserUsageDto
+{
+    public int UserId { get; init; }
+    public string Username { get; init; } = "";
+    public string DisplayName { get; init; } = "";
+    public bool IsOwner { get; init; }
+    public int Interactions { get; init; }
+    public long PromptTokens { get; init; }
+    public long CompletionTokens { get; init; }
+}
+
+/// <summary>
+/// A bot's usage summary for its creator (§12a, §2.5): totals, the quota cap, the
+/// kill-switch state, and a per-user breakdown of who is consuming the key.
+/// </summary>
+public sealed record BotUsageDto
+{
+    public int BotId { get; init; }
+    public string BotName { get; init; } = "";
+    public int Interactions { get; init; }
+    public long PromptTokens { get; init; }
+    public long CompletionTokens { get; init; }
+    public long TotalTokens { get; init; }
+    public int? MaxInteractions { get; init; }
+    public bool Suspended { get; init; }
+    public DateTime? FirstInteractionAt { get; init; }
+    public DateTime? LastInteractionAt { get; init; }
+    public IReadOnlyList<BotUserUsageDto> ByUser { get; init; } = Array.Empty<BotUserUsageDto>();
 }
 
 public sealed record BotRequest
@@ -244,6 +289,18 @@ public sealed record CreateUserRequest
     public string Username { get; init; } = "";
     public string? DisplayName { get; init; }
     public string Password { get; init; } = "";
+}
+
+/// <summary>Admin sets a new password for a user (§7.4).</summary>
+public sealed record ResetPasswordRequest
+{
+    public string Password { get; init; } = "";
+}
+
+/// <summary>Admin enables or disables a user account (§7.4).</summary>
+public sealed record SetActiveRequest
+{
+    public bool IsActive { get; init; }
 }
 
 public sealed record MessageDto

@@ -48,6 +48,21 @@ public class Bot
     /// </summary>
     public int? EvolutionUpToMessageId { get; set; }
 
+    /// <summary>
+    /// Kill switch (§12a, §2.5). When true, every LLM call for this bot is refused
+    /// with a clear notice — an immediate way for the creator to stop the bot from
+    /// consuming their key (e.g. after a runaway conversation or a bill spike).
+    /// Default false.
+    /// </summary>
+    public bool Suspended { get; set; }
+
+    /// <summary>
+    /// Usage quota (§12a, §2.5): a cap on the total number of LLM interactions
+    /// logged for this bot. Null or 0 = unlimited. When the cap is reached the bot
+    /// stops answering (the kill-switch notice). The creator can raise it later.
+    /// </summary>
+    public int? MaxInteractions { get; set; }
+
     public int PresetId { get; set; }
 
     public DateTime CreatedAt { get; set; }

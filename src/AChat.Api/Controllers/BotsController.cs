@@ -128,6 +128,87 @@ public class BotsController(AppDbContext db) : ControllerBase
         return Ok(ToDto(bot, last.GetValueOrDefault(id)));
     }
 
+    // ── Usage controls (§12a, §2.5) — owner-only: kill switch + quota + usage ──
+
+    /// <summary>
+    /// Update the bot's usage controls (§12a, §2.5): the kill switch
+    /// (<c>Suspended</c>) and the interaction quota (<c>MaxInteractions</c>, 0 = unlimited).
+    /// Partial update — null fields are left unchanged.
+    /// </summary>
+    [HttpPatch("{id:int}/settings")]
+    public async Task<ActionResult<BotDto>> UpdateSettings(int id, [FromBody] BotSettingsRequest req)
+    {
+        var bot = await _OwnedBotAsync(id);
+        if (bot is null) return NotFound();
+
+        if (req.Suspended is { } s) bot.Suspended = s;
+        if (req.MaxInteractions is { } cap)
+        {
+            if (cap < 0) return BadRequest(new { message = "Quota must be 0 (unlimited) or a positive number of interactions." });
+            bot.MaxInteractions = cap == 0 ? null : cap;
+        }
+        bot.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        var last = await LastMessageByBotAsync([id]);
+        return Ok(ToDto(bot, last.GetValueOrDefault(id)));
+    }
+
+    /// <summary>
+    /// The bot's usage for its creator (§12a, §2.5): totals, the quota cap, the
+    /// kill-switch state, and a per-user breakdown of who is consuming the key.
+    /// </summary>
+    [HttpGet("{id:int}/usage")]
+    public async Task<ActionResult<BotUsageDto>> Usage(int id)
+    {
+        var bot = await _OwnedBotAsync(id);
+        if (bot is null) return NotFound();
+
+        var interactions = await db.LlmInteractions.AsNoTracking()
+            .Where(i => i.BotId == id)
+            .ToListAsync();
+
+        var promptTokens = interactions.Where(i => i.PromptTokens.HasValue).Sum(i => i.PromptTokens!.Value);
+        var completionTokens = interactions.Where(i => i.CompletionTokens.HasValue).Sum(i => i.CompletionTokens!.Value);
+        var totalTokens = interactions.Where(i => i.TotalTokens.HasValue).Sum(i => i.TotalTokens!.Value);
+
+        var byUser = interactions
+            .GroupBy(i => i.UserId)
+            .Select(g => new { g.Key, Count = g.Count(),
+                              P = g.Where(i => i.PromptTokens.HasValue).Sum(i => i.PromptTokens!.Value),
+                              C = g.Where(i => i.CompletionTokens.HasValue).Sum(i => i.CompletionTokens!.Value) })
+            .OrderByDescending(x => x.Count)
+            .ToList();
+
+        var userIds = byUser.Select(x => x.Key).ToList();
+        var users = await db.Users.AsNoTracking()
+            .Where(u => userIds.Contains(u.Id))
+            .ToDictionaryAsync(u => u.Id);
+
+        return Ok(new BotUsageDto
+        {
+            BotId = id,
+            BotName = bot.Name,
+            Interactions = interactions.Count,
+            PromptTokens = promptTokens,
+            CompletionTokens = completionTokens,
+            TotalTokens = totalTokens,
+            MaxInteractions = bot.MaxInteractions,
+            Suspended = bot.Suspended,
+            FirstInteractionAt = interactions.Count > 0 ? interactions.Min(i => i.CreatedAt) : null,
+            LastInteractionAt = interactions.Count > 0 ? interactions.Max(i => i.CreatedAt) : null,
+            ByUser = byUser.Select(x => new BotUserUsageDto
+            {
+                UserId = x.Key,
+                Username = users.GetValueOrDefault(x.Key)?.Username ?? "?",
+                DisplayName = users.GetValueOrDefault(x.Key)?.DisplayName ?? "?",
+                IsOwner = x.Key == bot.OwnerId,
+                Interactions = x.Count,
+                PromptTokens = x.P,
+                CompletionTokens = x.C,
+            }).ToList(),
+        });
+    }
+
     // ── Directives (§2.4) — discrete, individually editable, admin-only ────────
 
     [HttpGet("{id:int}/directives")]
@@ -549,5 +630,7 @@ public class BotsController(AppDbContext db) : ControllerBase
         LastMessagePreview = last?.Preview,
         IsOwner = b.OwnerId == _userId,
         SharedBy = b.OwnerId == _userId ? null : b.Owner.DisplayName,
+        Suspended = b.Suspended,
+        MaxInteractions = b.MaxInteractions,
     };
 }

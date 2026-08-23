@@ -27,11 +27,21 @@ RUN dotnet publish src/AChat.Api/AChat.Api.csproj -c Release -o /app/publish --n
 # ── Stage 3: Runtime ───────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
+
+# Non-root user (§12a). The app binds 8080 (an unprivileged port) and needs no
+# root capability; the Data Protection key ring lives in the database, not the
+# filesystem, so there is no secret file to protect by ownership.
+RUN groupadd --system achat \
+    && useradd --system --gid achat --home-dir /app --shell /usr/sbin/nologin achat
+
 COPY --from=api-build /app/publish ./
 
 # Copy React build output into wwwroot
 COPY --from=ui-build /ui/dist ./wwwroot
 
+RUN chown -R achat:achat /app
+
 EXPOSE 8080
 ENV ASPNETCORE_URLS=http://+:8080
+USER achat
 ENTRYPOINT ["dotnet", "AChat.Api.dll"]

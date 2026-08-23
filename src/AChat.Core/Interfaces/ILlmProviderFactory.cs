@@ -18,6 +18,16 @@ public sealed record LlmPresetConfig
     public float? Temperature { get; init; }
     public int? MaxTokens { get; init; }
     public int TimeoutMs { get; init; } = 120_000;
+
+    /// <summary>
+    /// Transient-failure retries (§4.5): extra attempts after the first, for
+    /// connection errors, timeouts, and HTTP 408/429/5xx. Non-transient 4xx is never
+    /// retried. 0 disables retrying. Default 2.
+    /// </summary>
+    public int MaxRetries { get; init; } = 2;
+
+    /// <summary>Base delay for exponential backoff between retries, in ms (§4.5). Default 1000.</summary>
+    public int RetryBaseDelayMs { get; init; } = 1000;
 }
 
 /// <summary>A strategy for one provider family (§4.1).</summary>

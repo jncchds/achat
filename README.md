@@ -57,6 +57,8 @@ with the `ACHAT_` prefix and .NET nested-key convention (`ACHAT_Section__Key`):
 | `Evolution__CooldownHours` | `12` | Cooldown between rewrites — a human edit or revert also resets it |
 | `Evolution__MaxTailMessages` | `60` | Conversation tail sent to the evolver |
 | `Evolution__MaxTokens` | `512` | Output cap for the evolution call |
+| `Retention__InteractionDays` | `90` | Prune audit-log interactions older than this many days; `0` = keep forever (§4.4) |
+| `Retention__IntervalHours` | `6` | How often the retention worker runs |
 
 ## Development workflow
 
@@ -115,6 +117,8 @@ ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase5.mjs   # PHASE5_PRESET=<
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase5-mock.mjs  # offline (mock on 18999)
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase4.mjs
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase3.mjs
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase7-verify.mjs  # new providers against a live endpoint
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase8-verify.mjs  # disable/reset, kill switch, quota, usage
 ```
 
 The mock LLM (`node scripts/e2e/mockllm.mjs [port]`, default 18999) serves
@@ -171,4 +175,27 @@ src/
   (plain HTTP + System.Text.Json, no SDKs), differing only in default base URL and key
   handling (Ollama is keyless) — verified: each new provider lists models and a bot
   chats end-to-end against a live OpenAI-compatible endpoint
-- **Phase 8 — Operational maturity**: see the delivery plan in `docs/design.md` §12a
+- **Phase 8 — Operational maturity** ✅ admin user management (disable / reset /
+  delete, with self-lockout and audit-log guards), per-bot **kill switch** + **usage
+  quota** + **per-user usage visibility** (who is spending the creator's key),
+  interaction-log **retention** (background pruning, `Retention:InteractionDays`),
+  **retry with backoff** for transient LLM failures (§4.5), non-root container,
+  accessibility pass, backup guidance — verified: a disabled user is refused at login,
+  a paused bot stops answering, a quota-capped bot stops at the cap, and the usage
+  view breaks spend down by user
+
+## Backing up
+
+Everything that matters — conversations, memories, personas, presets, the audit log,
+**and the Data Protection key ring that decrypts your API keys** — lives in the
+PostgreSQL database. There is no separate secret file or volume to back up. So a
+backup is a database dump:
+
+```sh
+docker compose exec -T postgres pg_dump -U achat achat > achat-backup-$(date +%F).sql
+```
+
+Restore by dropping and re-creating the schema, then applying the dump (or restore
+the dump to a fresh database and point `ACHAT_ConnectionStrings__DefaultConnection`
+at it). **Back up before upgrading or migrating** — a restore that loses the key ring
+makes stored API keys undecryptable and you'd have to re-enter them.

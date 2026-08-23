@@ -17,6 +17,13 @@ public class User
     public bool IsAdmin { get; set; }
 
     /// <summary>
+    /// Whether the account can sign in (§7.4). A disabled account is rejected at
+    /// login and cannot start new work; existing data is retained, so re-enabling
+    /// restores the relationship intact. Default true.
+    /// </summary>
+    public bool IsActive { get; set; } = true;
+
+    /// <summary>
     /// IANA timezone name (e.g. "Europe/Moscow") used to render the current time in
     /// prompts and relative ages (§5.9). Null until the user sets one.
     /// </summary>

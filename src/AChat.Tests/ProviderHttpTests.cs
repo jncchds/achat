@@ -80,13 +80,16 @@ public sealed class ProviderHttpTests : IDisposable
         }
     }
 
-    private static LlmPresetConfig Cfg(LlmProvider p, string endpoint, string? key = "sekrit") => new()
+    private static LlmPresetConfig Cfg(LlmProvider p, string endpoint, string? key = "sekrit",
+        int maxRetries = 0, int baseDelayMs = 10) => new()
     {
         Provider = p,
         Endpoint = endpoint,
         ApiKey = key,
         GenerationModel = "m1",
         TimeoutMs = 5000,
+        MaxRetries = maxRetries,
+        RetryBaseDelayMs = baseDelayMs,
     };
 
     private (string Method, string Path, string? Auth) Last()
@@ -152,6 +155,45 @@ public sealed class ProviderHttpTests : IDisposable
         // The listener returns one vector; ordering/shape is preserved.
         Assert.Single(vecs);
         Assert.Equal(3, vecs[0].Length);
+    }
+
+    [Fact]
+    public async Task Transient_500_is_retried_then_succeeds()
+    {
+        // First request → 500 (transient), second → 200. With MaxRetries ≥ 1 the
+        // provider should recover and return the second response (§4.5).
+        var port = GetFreePort();
+        var flaky = new HttpListener();
+        flaky.Prefixes.Add($"http://127.0.0.1:{port}/");
+        flaky.Start();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                for (var i = 0; i < 2; i++)
+                {
+                    var ctx = await flaky.GetContextAsync();
+                    string body = i == 0
+                        ? """{"error":"transient"}"""
+                        : """{"choices":[{"message":{"content":"recovered"},"finish_reason":"stop"}]}""";
+                    ctx.Response.StatusCode = i == 0 ? 500 : 200;
+                    var b = Encoding.UTF8.GetBytes(body);
+                    ctx.Response.ContentLength64 = b.Length;
+                    await ctx.Response.OutputStream.WriteAsync(b);
+                    ctx.Response.Close();
+                }
+            }
+            catch { }
+            finally { flaky.Stop(); }
+        });
+
+        var provider = new OpenAIProvider(Cfg(LlmProvider.OpenAI, $"http://127.0.0.1:{port}/v1", maxRetries: 2, baseDelayMs: 10));
+        var completion = await provider.ChatAsync(new LlmChatRequest
+        {
+            Model = "m1",
+            Messages = [new LlmChatMessage(MessageRole.User, "hi")],
+        });
+        Assert.Equal("recovered", completion.Content);
     }
 
     [Fact]

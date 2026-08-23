@@ -71,6 +71,28 @@ public sealed class ChatService
             ?? throw new KeyNotFoundException($"Bot {botId} not found for user {userId}.");
         var preset = bot.Preset;
 
+        // ── Kill switch + usage quota (§12a, §2.5) ─────────────────────────────
+        // Checked before any persistence or LLM call: a suspended/quota-exceeded bot
+        // spends no key and logs no interaction. The message reaches the client as a
+        // chat.failed notice.
+        if (bot.Suspended)
+            throw new BotUnavailableException(
+                "This bot has been paused by its creator. Please try again later.")
+            {
+                Suspended = true,
+            };
+        if (bot.MaxInteractions is > 0)
+        {
+            var used = await _db.LlmInteractions.CountAsync(i => i.BotId == bot.Id);
+            if (used >= bot.MaxInteractions)
+                throw new BotUnavailableException(
+                    $"This bot has reached its usage limit ({bot.MaxInteractions} interactions). " +
+                    "Ask its creator to raise the limit in the bot settings.")
+                {
+                    QuotaExceeded = true,
+                };
+        }
+
         // ── Timeline: one continuous conversation per (bot, user) (§2.3) ────────
         var conversation = await _db.Conversations
             .FirstOrDefaultAsync(c => c.BotId == botId && c.UserId == userId);

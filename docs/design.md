@@ -291,7 +291,7 @@ limiting are out of scope for v1.
 using the preset's endpoint + key (implemented; UI button on the preset editor). A provider
 that becomes unreachable mid-conversation surfaces as a **failed LLM interaction** (§4.4)
 with the HTTP status and error payload — the user sees a failure notice in chat, the log
-carries the detail. No automatic retry in v1.
+carries the detail. Transient failures are retried with backoff (§4.5).
 
 ---
 
@@ -361,15 +361,28 @@ abook's `TokenUsageRecord` is the closest existing model and covers roughly the 
 of that field list (counts, endpoint, model, failed flag, failure reason, `CreatedAt`, soft
 delete). The content fields and the viewer are new — see §11a delta 2.
 
-`[OPEN]` — this table will dominate database size, far more so than abook's since it stores
-message text. Needs a retention/pruning policy, and a decision on whether request bodies are
-stored verbatim or deduplicated. Also: an interaction log containing full conversation text
-is a privacy surface — it must be admin-scoped, and it interacts directly with the shared-bot
-privacy question in §2.5.3.
+`[DECIDED]` (Phase 8) — **retention & pruning.** The log is the table that dominates
+database size (it stores full request/response text). A background worker
+(`InteractionRetentionService`) prunes interactions older than `Retention:InteractionDays`
+(default **90**; `0` = keep forever) in batches of 5,000, every `Retention:IntervalHours`
+(default 6) — a data change made through the application, never by hand. Request bodies are
+stored **verbatim** (no deduplication): at AChat's row counts, simplicity and full
+debuggability outweigh the storage cost. The log remains admin-scoped (§2.5.3).
 
-### 4.5 Retries & failure handling `[OPEN]`
+### 4.5 Retries & failure handling `[DECIDED]`
 
-Retry policy, backoff, timeouts, and what the user sees when generation fails.
+`[DECIDED]` (Phase 8):
+
+- **Retry policy** — transient failures (connection errors, timeouts, HTTP **408/429/5xx**)
+  are retried with **exponential backoff + jitter** (base `RetryBaseDelayMs`, default
+  1000 ms, doubling per attempt, capped), up to `MaxRetries` extra attempts (default **2**).
+  **Non-transient 4xx is never retried** — it is surfaced immediately. A user stop is never
+  retried and propagates as a cancel, not a failure.
+- **Timeouts** — per-preset `TimeoutMs` (default 120 s).
+- **What the user sees** — after retries are exhausted (or on a non-transient error), a single
+  failure notice appears in chat (`chat.failed`) with the HTTP status and the provider's
+  message; there is no mid-stream retry. The interaction log records the terminal status.
+  (Supersedes the "no automatic retry" note in §3, which predates Phase 8.)
 
 ### 4.6 Tool use / function calling `[DECIDED — out of scope for v1]`
 
@@ -807,10 +820,21 @@ Rules that follow:
 becomes undecryptable; the app must fail gracefully and prompt for re-entry rather than
 crash on startup).
 
-### 7.4 Authorization `[OPEN]`
+### 7.4 Authorization `[DECIDED]`
 
-What admins can do beyond existing (see all users? manage users? see others' bots?), and
-whether there are roles beyond admin/user.
+`[DECIDED]` (Phase 8) — **two roles, admin and user; no others.** Bot ownership is a
+relationship (`Bot.OwnerId`), not a role — the creator is the *bot* admin for that bot, the
+system **admin** manages accounts.
+
+- **System admin** can see all users and manage them: create (§7.2), **enable/disable**, **reset
+  a password**, and **delete**. Disabling takes effect immediately — the account is refused at
+  login *and* on every authorized request (an `ActiveUser` authorization requirement), not just
+  after re-login. An admin cannot disable or delete **themselves** (no self-lockout).
+- **Deleting a user** is blocked when they own bots or have logged LLM interactions (the audit
+  log references them) — disable such a user instead. Otherwise their conversations, bot access,
+  and access requests cascade away.
+- **Bot owners** manage their own bot's usage controls (kill switch + quota, §2.5) and sharing
+  (§2.5); they cannot manage other users or other people's bots.
 
 ---
 
@@ -1232,6 +1256,11 @@ Admin user management, usage visibility and quotas for bot admins, interaction-l
 and pruning (§4.4), retry and failure-handling policy (§4.5), health checks, non-root
 container, accessibility pass, backup guidance.
 
+*Done when*: an admin can disable / reset / delete a user (with self-lockout and audit-log
+guards); a bot owner can pause a bot (kill switch), cap its usage (quota), and see exactly
+who is spending the key; the audit log prunes itself on a retention window; transient LLM
+failures are retried with backoff; the container runs as a non-root user. **Shipped.**
+
 ### Later, explicitly not v1
 
 Tool calling — `remember(...)` first, then reminders (§4.6). Proactive messaging (§2.3).
@@ -1250,19 +1279,24 @@ container shape inherited from abook (§8, §10, §11a) · the §2.4 personality
 layers, creator-only evolution, versioned, per-bot switch — implemented in Phase 5 ·
 generation parameters on the preset in v1 (§2.4) · user timezone captured at login **and**
 set explicitly (§5.9) · §5 memory initial values as config (§5.10) · `AGENTS.md` written;
-this document stays the spec (§11a).
+this document stays the spec (§11a) · **Phase 7**: all four providers are OpenAI-shaped and
+share one implementation (§3, §4.1) · **Phase 8**: two roles admin/user (§7.4), admin can
+disable/reset/delete users with self-lockout and audit-log guards (§7.4), per-bot kill switch
++ usage quota + per-user usage visibility (§2.5), interaction-log retention via a background
+worker (§4.4), transient-failure retry with backoff (§4.5), non-root container, accessibility
+pass, and backup guidance.
 
 **Still open, roughly by weight:**
 
-1. Review the §12a phase ordering (Phases 0–5 are done; 6–8 remain).
+1. ~~Review the §12a phase ordering~~ — *Phases 0–8 are now complete.*
 2. Sharing — *resolved in Phase 6* (§2.5): log viewer scoped to system admins (creator),
    invitees told the creator can read the log · revocation retains the relationship ·
    code regeneration allowed · shared bots badged · one live request per (bot, user),
-   rejected users may re-request. Cost visibility / quotas remain Phase 8.
+   rejected users may re-request. Cost visibility / quotas *resolved in Phase 8* (§2.5).
 3. Message editing, deletion, and regeneration; group chats. (§2.3)
 4. Onboarding — what a bot knows at the first message of a new relationship. (§5.10.4)
 5. Bot reassignment to a preset with a different embedding model: block, or re-embed? (§5.7)
 6. Whether variable-length embeddings need an indexing strategy at AChat's row counts. (§6)
 7. Tuning the ranking/extraction/evolution constants against real conversations — all
    currently first guesses, all in config.
-8. Admin user management beyond creation (disable / reset / delete) — Phase 8 (§7.4).
+8. ~~Admin user management beyond creation (disable / reset / delete)~~ — *resolved in Phase 8* (§7.4).

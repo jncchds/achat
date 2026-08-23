@@ -39,7 +39,7 @@ public abstract class OpenAiShapedProvider(LlmPresetConfig config) : ILlmProvide
         ? DefaultBaseUrl
         : Config.Endpoint.TrimEnd('/'));
 
-    private HttpClient Http => new()
+    private HttpClient CreateClient() => new()
     {
         Timeout = TimeSpan.FromMilliseconds(Config.TimeoutMs > 0 ? Config.TimeoutMs : 120_000),
     };
@@ -50,19 +50,158 @@ public abstract class OpenAiShapedProvider(LlmPresetConfig config) : ILlmProvide
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Config.ApiKey);
     }
 
+    private HttpRequestMessage BuildJsonRequest(HttpMethod method, string path, object? body)
+    {
+        var req = new HttpRequestMessage(method, BaseUrl + path);
+        ApplyAuth(req);
+        if (body is not null)
+            req.Content = new StringContent(
+                JsonSerializer.Serialize(body, JsonOpts), System.Text.Encoding.UTF8, "application/json");
+        return req;
+    }
+
+    // ── Retries & backoff (§4.5) ─────────────────────────────────────────────
+    // Transient failures — connection errors, timeouts, HTTP 408/429/5xx — are
+    // retried with exponential backoff + jitter. Non-transient 4xx is surfaced
+    // immediately. A user cancellation (ct) is never retried and propagates as-is.
+    private static bool IsTransientStatus(int status) =>
+        status is 408 or 429 or 500 or 502 or 503 or 504;
+
+    private static bool IsTransientException(Exception ex, CancellationToken ct) =>
+        ex is HttpRequestException
+        || (ex is OperationCanceledException && !ct.IsCancellationRequested); // a timeout
+
+    private async Task BackoffAsync(int attempt, CancellationToken ct)
+    {
+        var baseMs = Math.Max(0, Config.RetryBaseDelayMs);
+        var delay = baseMs * (1 << Math.Min(attempt, 6)); // 1s, 2s, 4s, …
+        await Task.Delay(delay + Random.Shared.Next(0, 100), ct);
+    }
+
+    /// <summary>
+    /// Send a buffered request, retrying transient failures (§4.5). Returns the
+    /// status code + body; throws <see cref="LlmProviderException"/> on a terminal
+    /// failure. A user cancellation propagates unchanged.
+    /// </summary>
+    private async Task<(int Status, string Body)> SendBufferedAsync(
+        Func<HttpRequestMessage> create, CancellationToken ct)
+    {
+        var maxRetries = Math.Max(0, Config.MaxRetries);
+        for (var attempt = 0; ; attempt++)
+        {
+            var http = CreateClient();
+            var req = create();
+            try
+            {
+                var resp = await http.SendAsync(req, ct);
+                var status = (int)resp.StatusCode;
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                var ok = resp.IsSuccessStatusCode;
+                resp.Dispose();
+
+                if (ok)
+                {
+                    http.Dispose();
+                    return (status, body);
+                }
+                if (IsTransientStatus(status) && attempt < maxRetries)
+                {
+                    http.Dispose();
+                    await BackoffAsync(attempt, ct);
+                    continue;
+                }
+                http.Dispose();
+                throw new LlmProviderException($"Provider returned {status}", status, body);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException && ct.IsCancellationRequested)
+            {
+                throw; // user stopped — propagate, do not retry or wrap
+            }
+            catch (Exception ex) when (ex is LlmProviderException)
+            {
+                throw; // terminal failure from above
+            }
+            catch (Exception ex) when (IsTransientException(ex, ct) && attempt < maxRetries)
+            {
+                http.Dispose();
+                await BackoffAsync(attempt, ct);
+                continue;
+            }
+            catch (Exception ex)
+            {
+                http.Dispose();
+                throw new LlmProviderException("Could not reach the provider", null, ex.Message, ex);
+            }
+            finally
+            {
+                req.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Send the initial request for a streaming call, retrying transient failures
+    /// (§4.5) until a 2xx arrives. Ownership of the returned client + response
+    /// transfers to the caller (dispose after consuming the stream).
+    /// </summary>
+    private async Task<(HttpClient Http, HttpResponseMessage Resp)> SendStreamWithRetryAsync(
+        Func<HttpRequestMessage> create, CancellationToken ct)
+    {
+        var maxRetries = Math.Max(0, Config.MaxRetries);
+        for (var attempt = 0; ; attempt++)
+        {
+            var http = CreateClient();
+            var req = create();
+            try
+            {
+                var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    var status = (int)resp.StatusCode;
+                    var body = await resp.Content.ReadAsStringAsync(ct);
+                    resp.Dispose();
+                    if (IsTransientStatus(status) && attempt < maxRetries)
+                    {
+                        http.Dispose();
+                        await BackoffAsync(attempt, ct);
+                        continue;
+                    }
+                    http.Dispose();
+                    throw new LlmProviderException($"Provider returned {status}", status, body);
+                }
+                return (http, resp); // ownership transferred
+            }
+            catch (Exception ex) when (ex is OperationCanceledException && ct.IsCancellationRequested)
+            {
+                throw; // user stopped — propagate
+            }
+            catch (Exception ex) when (ex is LlmProviderException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (IsTransientException(ex, ct) && attempt < maxRetries)
+            {
+                http.Dispose();
+                await BackoffAsync(attempt, ct);
+                continue;
+            }
+            catch (Exception ex)
+            {
+                http.Dispose();
+                throw new LlmProviderException("Could not reach the provider", null, ex.Message, ex);
+            }
+            finally
+            {
+                req.Dispose();
+            }
+        }
+    }
+
     // ── Non-streaming chat ──────────────────────────────────────────────────────
     public async Task<LlmCompletion> ChatAsync(LlmChatRequest request, CancellationToken ct = default)
     {
-        using var http = Http;
-        using var req = new HttpRequestMessage(HttpMethod.Post, BaseUrl + "/chat/completions");
-        ApplyAuth(req);
-        req.Content = new StringContent(JsonSerializer.Serialize(
-            BuildChatBody(request, stream: false), JsonOpts), System.Text.Encoding.UTF8, "application/json");
-
-        using var resp = await http.SendAsync(req, ct);
-        var body = await resp.Content.ReadAsStringAsync(ct);
-        if (!resp.IsSuccessStatusCode)
-            throw new LlmProviderException($"Provider returned {(int)resp.StatusCode}", (int)resp.StatusCode, body);
+        var (_, body) = await SendBufferedAsync(
+            () => BuildJsonRequest(HttpMethod.Post, "/chat/completions", BuildChatBody(request, stream: false)), ct);
 
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;
@@ -84,23 +223,20 @@ public abstract class OpenAiShapedProvider(LlmPresetConfig config) : ILlmProvide
     public async IAsyncEnumerable<LlmStreamChunk> StreamChatAsync(
         LlmChatRequest request, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        using var http = Http;
-        using var req = new HttpRequestMessage(HttpMethod.Post, BaseUrl + "/chat/completions")
+        HttpRequestMessage Create()
         {
-            Headers = { Accept = { new MediaTypeWithQualityHeaderValue("text/event-stream") } },
-        };
-        ApplyAuth(req);
-        req.Content = new StringContent(JsonSerializer.Serialize(
-            BuildChatBody(request, stream: true), JsonOpts), System.Text.Encoding.UTF8, "application/json");
-
-        using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
-        if (!resp.IsSuccessStatusCode)
-        {
-            var body = await resp.Content.ReadAsStringAsync(ct);
-            throw new LlmProviderException($"Provider returned {(int)resp.StatusCode}", (int)resp.StatusCode, body);
+            var req = BuildJsonRequest(HttpMethod.Post, "/chat/completions", BuildChatBody(request, stream: true));
+            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+            return req;
         }
 
-        using var stream = await resp.Content.ReadAsStreamAsync(ct);
+        // Retry transient failures on the initial send (§4.5); once a 2xx arrives,
+        // stream it. Ownership of client + response is held for the lifetime of the
+        // iteration and released by the using declarations below.
+        var (http, resp) = await SendStreamWithRetryAsync(Create, ct);
+        using var client = http;
+        using var response = resp;
+        using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
         string? line;
         while ((line = await reader.ReadLineAsync(ct)) is not null)
@@ -151,16 +287,8 @@ public abstract class OpenAiShapedProvider(LlmPresetConfig config) : ILlmProvide
     // ── Embeddings ──────────────────────────────────────────────────────────────
     public async Task<IReadOnlyList<float[]>> EmbedAsync(string model, IReadOnlyList<string> texts, CancellationToken ct = default)
     {
-        using var http = Http;
-        using var req = new HttpRequestMessage(HttpMethod.Post, BaseUrl + "/embeddings");
-        ApplyAuth(req);
-        req.Content = new StringContent(JsonSerializer.Serialize(new { model, input = texts.ToArray() }, JsonOpts),
-            System.Text.Encoding.UTF8, "application/json");
-
-        using var resp = await http.SendAsync(req, ct);
-        var body = await resp.Content.ReadAsStringAsync(ct);
-        if (!resp.IsSuccessStatusCode)
-            throw new LlmProviderException($"Provider returned {(int)resp.StatusCode}", (int)resp.StatusCode, body);
+        var (_, body) = await SendBufferedAsync(
+            () => BuildJsonRequest(HttpMethod.Post, "/embeddings", new { model, input = texts.ToArray() }), ct);
 
         using var doc = JsonDocument.Parse(body);
         return doc.RootElement.GetProperty("data").EnumerateArray()
@@ -172,14 +300,8 @@ public abstract class OpenAiShapedProvider(LlmPresetConfig config) : ILlmProvide
     // ── Model catalogue ─────────────────────────────────────────────────────────
     public async Task<IReadOnlyList<LlmModelInfo>> ListModelsAsync(CancellationToken ct = default)
     {
-        using var http = Http;
-        using var req = new HttpRequestMessage(HttpMethod.Get, BaseUrl + "/models");
-        ApplyAuth(req);
-
-        using var resp = await http.SendAsync(req, ct);
-        var body = await resp.Content.ReadAsStringAsync(ct);
-        if (!resp.IsSuccessStatusCode)
-            throw new LlmProviderException($"Provider returned {(int)resp.StatusCode}", (int)resp.StatusCode, body);
+        var (_, body) = await SendBufferedAsync(
+            () => BuildJsonRequest(HttpMethod.Get, "/models", null), ct);
 
         using var doc = JsonDocument.Parse(body);
         var list = new List<LlmModelInfo>();

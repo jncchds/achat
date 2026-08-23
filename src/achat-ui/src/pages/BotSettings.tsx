@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   addDirective, apiError, approveRequest, deleteDirective, editPersona, getBot,
-  getBotShare, listDirectives, listPersonaVersions, regenerateInvite, rejectRequest,
-  revertPersona, revokeAccess, updateBot, updateDirective,
-  type Bot, type BotShare, type Directive, type PersonaVersion,
+  getBotShare, getBotUsage, listDirectives, listPersonaVersions, regenerateInvite,
+  rejectRequest, revertPersona, revokeAccess, updateBot, updateBotSettings, updateDirective,
+  type Bot, type BotShare, type BotUsage, type Directive, type PersonaVersion,
 } from '../api'
 
 const SOURCE_LABEL: Record<string, { text: string; cls: string }> = {
@@ -26,6 +26,123 @@ function MemberRow({ label, sub, tag, since, action }: {
         {since && <span className="hint"> · since {since}</span>}
       </div>
       {action}
+    </div>
+  )
+}
+
+// ── Usage & controls (§12a, §2.5) — owner-only: kill switch, quota, usage ─────
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <div className="mono" style={{ fontSize: '1.3rem', fontWeight: 600 }}>{value.toLocaleString()}</div>
+      <div className="hint">{label}</div>
+    </div>
+  )
+}
+
+function UsageSection({ bot }: { bot: number }) {
+  const [usage, setUsage] = useState<BotUsage | null>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [quota, setQuota] = useState('')
+
+  const load = useCallback(() => {
+    getBotUsage(bot).then(u => {
+      setUsage(u)
+      setQuota(u.maxInteractions ? String(u.maxInteractions) : '')
+    }).catch(e => setError(apiError(e)))
+  }, [bot])
+  useEffect(() => { load() }, [load])
+
+  const toggleSuspend = async () => {
+    if (!usage) return
+    setBusy(true); setError('')
+    try {
+      await updateBotSettings(bot, { suspended: !usage.suspended })
+      load()
+    } catch (e) { setError(apiError(e)); load() } finally { setBusy(false) }
+  }
+
+  const saveQuota = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const n = quota.trim() === '' ? 0 : Number(quota)
+    if (!Number.isInteger(n) || n < 0) { setError('Quota must be 0 (unlimited) or a positive whole number.'); return }
+    setBusy(true); setError('')
+    try {
+      await updateBotSettings(bot, { maxInteractions: n })
+      load()
+    } catch (e) { setError(apiError(e)) } finally { setBusy(false) }
+  }
+
+  if (!usage) {
+    return (
+      <div className="card" style={{ marginTop: '1.5rem' }}>
+        <h3 style={{ marginTop: 0 }}>Usage &amp; controls</h3>
+        <p className="hint">Loading…</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="card" style={{ marginTop: '1.5rem' }}>
+      <h3 style={{ marginTop: 0 }}>Usage &amp; controls</h3>
+      <p className="hint">
+        This bot runs on <b>your</b> key — see exactly how much is being used, by whom, and put it
+        on pause whenever you need to (§2.5).
+      </p>
+      {error && <p className="error-msg" role="alert">{error}</p>}
+
+      <div className="row" style={{ gap: '0.75rem', alignItems: 'center', marginBottom: '1rem' }}>
+        <button
+          className={usage.suspended ? 'btn-danger' : 'btn-ghost'}
+          onClick={toggleSuspend}
+          disabled={busy}
+          aria-pressed={usage.suspended}
+        >
+          {usage.suspended ? 'Unpause this bot' : 'Pause this bot (kill switch)'}
+        </button>
+        {usage.suspended && <span className="pill danger">paused — not responding, no key spend</span>}
+      </div>
+
+      <form onSubmit={saveQuota} className="row" style={{ alignItems: 'flex-end', gap: '0.75rem', marginBottom: '1rem' }}>
+        <label style={{ flex: '0 1 12rem' }}>Interaction quota <span className="hint">(0 = unlimited)</span>
+          <input value={quota} onChange={e => setQuota(e.target.value)} inputMode="numeric" placeholder="unlimited" />
+        </label>
+        <button className="btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save quota'}</button>
+        <span className="hint">{usage.interactions} / {usage.maxInteractions ?? '∞'} used</span>
+      </form>
+
+      <div className="row" style={{ gap: '2rem', marginBottom: '1.25rem' }}>
+        <Stat label="Interactions" value={usage.interactions} />
+        <Stat label="Prompt tokens" value={usage.promptTokens} />
+        <Stat label="Completion tokens" value={usage.completionTokens} />
+        <Stat label="Total tokens" value={usage.totalTokens} />
+      </div>
+
+      <h3 style={{ margin: '0 0 0.5rem' }}>By user</h3>
+      <div className="table-wrap">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Interactions</th>
+              <th>Prompt tokens</th>
+              <th>Completion tokens</th>
+            </tr>
+          </thead>
+          <tbody>
+            {usage.byUser.map(u => (
+              <tr key={u.userId}>
+                <td>{u.displayName}{u.isOwner ? ' (you)' : ''}</td>
+                <td>{u.interactions}</td>
+                <td>{u.promptTokens.toLocaleString()}</td>
+                <td>{u.completionTokens.toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -418,6 +535,7 @@ export default function BotSettings() {
         )}
       </div>
 
+      {botRow.isOwner && <UsageSection bot={bot} />}
       {botRow.isOwner && <SharingSection bot={bot} name={botRow.name} />}
     </div>
   )

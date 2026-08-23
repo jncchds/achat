@@ -136,6 +136,7 @@ export default function Bots() {
               </div>
               <div className="list-row-actions">
                 <Link className="btn btn-sm" to={`/bots/${b.id}`}>Chat →</Link>
+                <Link className="btn-ghost btn-sm" to={`/bots/${b.id}/settings`}>⚙️ Personality</Link>
                 <button className="btn-ghost btn-sm" onClick={() => setEditing(b)}>Edit</button>
                 <button className="btn-danger btn-sm" onClick={() => remove(b)}>Delete</button>
               </div>

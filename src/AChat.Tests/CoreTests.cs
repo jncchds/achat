@@ -55,6 +55,30 @@ public class PromptAssemblyTests
         var block = PromptAssembly.BuildPersonaBlock(TestBot(style: null));
         Assert.DoesNotContain("How you speak", block);
     }
+
+    [Fact]
+    public void Persona_block_orders_core_then_evolved_then_directives_last()
+    {
+        var block = PromptAssembly.BuildPersonaBlock(
+            TestBot(),
+            evolvedTraits: "You two share a running joke about the flat's heating.",
+            directives: ["Be more blunt.", "Never bring up my ex."]);
+
+        var core = block.IndexOf("A dry, warm friend.");
+        var evolved = block.IndexOf("running joke");
+        var d1 = block.IndexOf("Be more blunt.");
+        var d2 = block.IndexOf("Never bring up my ex.");
+        Assert.True(core >= 0 && evolved > core, "core must precede evolved traits");
+        Assert.True(d1 > evolved && d2 > d1, "directives must come last, in order");
+        Assert.Contains("override", block); // the admin's instructions are declared as winning
+    }
+
+    [Fact]
+    public void Empty_evolved_traits_are_omitted()
+    {
+        var block = PromptAssembly.BuildPersonaBlock(TestBot(), evolvedTraits: "   ");
+        Assert.DoesNotContain("How your friendship has shaped you", block);
+    }
 }
 
 public class TemporalAssemblyTests
@@ -367,5 +391,46 @@ public class OpenAICompatibleProviderTests
             GenerationModel = "x",
         }));
         Assert.Contains("Phase 7", ex.Message);
+    }
+}
+
+public class EvolutionTriggerTests
+{
+    private static readonly DateTime Now = new(2026, 8, 22, 12, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime Cutoff = Now.AddHours(-12); // 12h cooldown
+
+    [Fact]
+    public void Triggers_when_enough_new_messages_and_no_versions_yet()
+    {
+        Assert.True(PersonaEvolutionService.ShouldEvolve(50, null, 40, Cutoff));
+    }
+
+    [Fact]
+    public void Does_not_trigger_below_the_message_threshold()
+    {
+        Assert.False(PersonaEvolutionService.ShouldEvolve(10, null, 40, Cutoff));
+    }
+
+    [Fact]
+    public void Does_not_trigger_during_the_cooldown()
+    {
+        var recent = Now.AddMinutes(-30); // a version written half an hour ago
+        Assert.False(PersonaEvolutionService.ShouldEvolve(50, recent, 40, Cutoff));
+    }
+
+    [Fact]
+    public void Triggers_once_the_cooldown_has_elapsed()
+    {
+        var old = Now.AddHours(-24);
+        Assert.True(PersonaEvolutionService.ShouldEvolve(50, old, 40, Cutoff));
+    }
+
+    [Fact]
+    public void A_human_edit_or_revert_resets_the_cooldown()
+    {
+        // The newest version is a fresh human edit — the correction must not be
+        // overwritten by an immediate evolution pass.
+        var freshEdit = Now.AddMinutes(-5);
+        Assert.False(PersonaEvolutionService.ShouldEvolve(50, freshEdit, 40, Cutoff));
     }
 }

@@ -174,6 +174,7 @@ export default function Chat() {
       <div className="chat-toolbar">
         <span className="hint">{bot.name}</span>
         <Link to={`/bots/${id}/memories`} className="btn-ghost btn-sm">🧠 Memories</Link>
+        <Link to={`/bots/${id}/settings`} className="btn-ghost btn-sm">⚙️ Personality</Link>
       </div>
       <div className="chat-scroll" ref={scrollRef}>
         {msgs.map(m => (

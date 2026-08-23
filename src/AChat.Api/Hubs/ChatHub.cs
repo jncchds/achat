@@ -95,11 +95,14 @@ public class ChatHub(ChatService chat) : Hub
                 });
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        // A provider timeout is a TaskCanceledException without a user cancel —
+        // it must reach the client as chat.failed, not as a raw invoke error.
+        catch (Exception ex) when (ex is not OperationCanceledException || !cts.IsCancellationRequested)
         {
             try
             {
-                await Clients.Caller.SendAsync("chat.failed", new { message = ex.Message });
+                await Clients.Caller.SendAsync("chat.failed",
+                    new { message = ex is OperationCanceledException ? "The model request timed out." : ex.Message });
             }
             catch
             {

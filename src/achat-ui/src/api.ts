@@ -57,6 +57,7 @@ export interface Bot {
   presetName: string
   provider: Provider
   generationModel: string
+  evolutionEnabled: boolean
   createdAt: string
   updatedAt: string
   lastMessageAt: string | null
@@ -70,6 +71,25 @@ export interface BotInput {
   speechStyle?: string | null
   greeting?: string | null
   presetId: number
+  evolutionEnabled?: boolean
+}
+
+// ── Personality: directives + evolved traits (§2.4) ──────────────────────
+
+export interface Directive {
+  id: number
+  text: string
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PersonaVersion {
+  id: number
+  content: string
+  source: 'Initial' | 'Evolution' | 'UserEdited' | 'Revert'
+  interactionId: number | null
+  createdAt: string
 }
 
 export interface Message {
@@ -235,6 +255,24 @@ export const createBot = (b: BotInput) => http.post<Bot>('/api/bots', b).then(r 
 export const updateBot = (id: number, b: BotInput) => http.put<Bot>(`/api/bots/${id}`, b).then(r => r.data)
 export const deleteBot = (id: number) => http.delete(`/api/bots/${id}`)
 export const getMessages = (id: number) => http.get<Message[]>(`/api/bots/${id}/messages`).then(r => r.data)
+
+// Directives (§2.4)
+export const listDirectives = (botId: number) =>
+  http.get<Directive[]>(`/api/bots/${botId}/directives`).then(r => r.data)
+export const addDirective = (botId: number, text: string) =>
+  http.post<Directive>(`/api/bots/${botId}/directives`, { text }).then(r => r.data)
+export const updateDirective = (botId: number, id: number, body: { text?: string; isActive?: boolean }) =>
+  http.put<Directive>(`/api/bots/${botId}/directives/${id}`, body).then(r => r.data)
+export const deleteDirective = (botId: number, id: number) =>
+  http.delete(`/api/bots/${botId}/directives/${id}`)
+
+// Evolved traits — versioned (§2.4)
+export const listPersonaVersions = (botId: number) =>
+  http.get<PersonaVersion[]>(`/api/bots/${botId}/persona/versions`).then(r => r.data)
+export const editPersona = (botId: number, content: string) =>
+  http.put<PersonaVersion>(`/api/bots/${botId}/persona`, { content }).then(r => r.data)
+export const revertPersona = (botId: number, versionId: number) =>
+  http.post<PersonaVersion>(`/api/bots/${botId}/persona/versions/${versionId}/revert`).then(r => r.data)
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
 

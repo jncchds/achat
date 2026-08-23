@@ -13,3 +13,7 @@ wwwroot/
 
 # local config
 appsettings.Local.json
+
+# e2e artifacts
+scripts/e2e/mock-requests.jsonl
+scripts/e2e/mockllm.out

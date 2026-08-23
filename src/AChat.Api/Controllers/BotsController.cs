@@ -87,6 +87,17 @@ public class BotsController(AppDbContext db) : ControllerBase
             UpdatedAt = DateTime.UtcNow,
         };
         db.Bots.Add(bot);
+        await db.SaveChangesAsync(); // materialises bot.Id
+
+        // The version history starts with the empty baseline (§2.4) — every later
+        // rewrite appends, so the full story of the personality is readable.
+        db.PersonaVersions.Add(new PersonaVersion
+        {
+            BotId = bot.Id,
+            Content = "",
+            Source = PersonaVersionSource.Initial,
+            CreatedAt = DateTime.UtcNow,
+        });
         await db.SaveChangesAsync();
         return CreatedAtAction(nameof(Get), new { id = bot.Id }, ToDto(bot, null));
     }
@@ -109,10 +120,156 @@ public class BotsController(AppDbContext db) : ControllerBase
         bot.SpeechStyle = Blank(req.SpeechStyle);
         bot.Greeting = Blank(req.Greeting);
         bot.PresetId = preset.Id;
+        if (req.EvolutionEnabled is { } evolve) bot.EvolutionEnabled = evolve;
         bot.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
         var last = await LastMessageByBotAsync([id]);
         return Ok(ToDto(bot, last.GetValueOrDefault(id)));
+    }
+
+    // ── Directives (§2.4) — discrete, individually editable, admin-only ────────
+
+    [HttpGet("{id:int}/directives")]
+    public async Task<ActionResult<IReadOnlyList<DirectiveDto>>> ListDirectives(int id)
+    {
+        var bot = await _BotsBase().FirstOrDefaultAsync(b => b.Id == id);
+        if (bot is null) return NotFound();
+        var rows = await db.BotDirectives
+            .Where(d => d.BotId == id)
+            .OrderBy(d => d.Id)
+            .ToListAsync();
+        return Ok(rows.Select(d => new DirectiveDto
+        {
+            Id = d.Id, Text = d.Text, IsActive = d.IsActive,
+            CreatedAt = d.CreatedAt, UpdatedAt = d.UpdatedAt,
+        }).ToList());
+    }
+
+    [HttpPost("{id:int}/directives")]
+    public async Task<ActionResult<DirectiveDto>> AddDirective(int id, DirectiveRequest req)
+    {
+        var bot = await _BotsBase().FirstOrDefaultAsync(b => b.Id == id);
+        if (bot is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(req.Text))
+            return BadRequest(new { message = "A directive needs text." });
+
+        var row = new BotDirective
+        {
+            BotId = id,
+            Text = req.Text.Trim(),
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        db.BotDirectives.Add(row);
+        await db.SaveChangesAsync();
+        return Ok(new DirectiveDto
+        {
+            Id = row.Id, Text = row.Text, IsActive = row.IsActive,
+            CreatedAt = row.CreatedAt, UpdatedAt = row.UpdatedAt,
+        });
+    }
+
+    [HttpPut("{id:int}/directives/{did:int}")]
+    public async Task<ActionResult<DirectiveDto>> UpdateDirective(int id, int did, DirectiveRequest req)
+    {
+        var row = await db.BotDirectives.FirstOrDefaultAsync(d => d.Id == did && d.BotId == id);
+        if (row is null) return NotFound();
+        // Partial update: a toggle sends only isActive, an edit sends only text.
+        if (!string.IsNullOrWhiteSpace(req.Text)) row.Text = req.Text.Trim();
+        if (req.IsActive is { } active) row.IsActive = active;
+        row.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        return Ok(new DirectiveDto
+        {
+            Id = row.Id, Text = row.Text, IsActive = row.IsActive,
+            CreatedAt = row.CreatedAt, UpdatedAt = row.UpdatedAt,
+        });
+    }
+
+    [HttpDelete("{id:int}/directives/{did:int}")]
+    public async Task<IActionResult> DeleteDirective(int id, int did)
+    {
+        var row = await db.BotDirectives.FirstOrDefaultAsync(d => d.Id == did && d.BotId == id);
+        if (row is null) return NotFound();
+        db.BotDirectives.Remove(row);
+        await db.SaveChangesAsync();
+        return NoContent();
+    }
+
+    // ── Evolved traits: versioned layer (§2.4) — history, edit, revert ────────
+
+    [HttpGet("{id:int}/persona/versions")]
+    public async Task<ActionResult<IReadOnlyList<PersonaVersionDto>>> ListPersonaVersions(int id)
+    {
+        var bot = await _BotsBase().FirstOrDefaultAsync(b => b.Id == id);
+        if (bot is null) return NotFound();
+        var rows = await db.PersonaVersions
+            .Where(v => v.BotId == id)
+            .OrderBy(v => v.Id)
+            .ToListAsync();
+        return Ok(rows.Select(v => new PersonaVersionDto
+        {
+            Id = v.Id, Content = v.Content, Source = v.Source,
+            InteractionId = v.InteractionId, CreatedAt = v.CreatedAt,
+        }).ToList());
+    }
+
+    /// <summary>
+    /// Edit the current evolved-traits layer. Appends a new version flagged
+    /// UserEdited — the next evolution pass treats it as the new baseline and
+    /// never overwrites the correction (§2.4). Empty content clears the layer.
+    /// </summary>
+    [HttpPut("{id:int}/persona")]
+    public async Task<ActionResult<PersonaVersionDto>> EditPersona(int id, PersonaEditRequest req)
+    {
+        var bot = await _BotsBase().FirstOrDefaultAsync(b => b.Id == id);
+        if (bot is null) return NotFound();
+
+        var version = new PersonaVersion
+        {
+            BotId = id,
+            Content = req.Content.Trim(),
+            Source = PersonaVersionSource.UserEdited,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.PersonaVersions.Add(version);
+        await db.SaveChangesAsync();
+        return Ok(new PersonaVersionDto
+        {
+            Id = version.Id, Content = version.Content, Source = version.Source,
+            InteractionId = version.InteractionId, CreatedAt = version.CreatedAt,
+        });
+    }
+
+    /// <summary>
+    /// Revert to an earlier version. Appends a new version carrying that version's
+    /// content (Source = Revert) — the history stays intact and the revert itself
+    /// is visible in it (§2.4).
+    /// </summary>
+    [HttpPost("{id:int}/persona/versions/{vid:int}/revert")]
+    public async Task<ActionResult<PersonaVersionDto>> RevertPersona(int id, int vid)
+    {
+        var bot = await _BotsBase().FirstOrDefaultAsync(b => b.Id == id);
+        if (bot is null) return NotFound();
+
+        var target = await db.PersonaVersions.FirstOrDefaultAsync(v => v.Id == vid && v.BotId == id);
+        if (target is null) return NotFound();
+
+        var version = new PersonaVersion
+        {
+            BotId = id,
+            Content = target.Content,
+            Source = PersonaVersionSource.Revert,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.PersonaVersions.Add(version);
+        await db.SaveChangesAsync();
+        return Ok(new PersonaVersionDto
+        {
+            Id = version.Id, Content = version.Content, Source = version.Source,
+            InteractionId = version.InteractionId, CreatedAt = version.CreatedAt,
+        });
     }
 
     [HttpDelete("{id:int}")]
@@ -211,6 +368,7 @@ public class BotsController(AppDbContext db) : ControllerBase
         PresetName = b.Preset.Name,
         Provider = b.Preset.Provider,
         GenerationModel = b.Preset.GenerationModel,
+        EvolutionEnabled = b.EvolutionEnabled,
         CreatedAt = b.CreatedAt,
         UpdatedAt = b.UpdatedAt,
         LastMessageAt = last?.LastAt,

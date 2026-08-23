@@ -85,6 +85,14 @@ namespace AChat.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<bool>("EvolutionEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<int?>("EvolutionUpToMessageId")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Greeting")
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)");
@@ -152,6 +160,40 @@ namespace AChat.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("BotAccesses", (string)null);
+                });
+
+            modelBuilder.Entity("AChat.Core.Models.BotDirective", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("BotId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BotId");
+
+                    b.ToTable("BotDirectives", (string)null);
                 });
 
             modelBuilder.Entity("AChat.Core.Models.Conversation", b =>
@@ -268,7 +310,7 @@ namespace AChat.Infrastructure.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
-                    b.Property<int>("PresetId")
+                    b.Property<int?>("PresetId")
                         .HasColumnType("integer");
 
                     b.Property<int?>("PromptTokens")
@@ -486,6 +528,39 @@ namespace AChat.Infrastructure.Migrations
                     b.ToTable("Messages", (string)null);
                 });
 
+            modelBuilder.Entity("AChat.Core.Models.PersonaVersion", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("BotId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("InteractionId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Source")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BotId");
+
+                    b.ToTable("PersonaVersions", (string)null);
+                });
+
             modelBuilder.Entity("AChat.Core.Models.User", b =>
                 {
                     b.Property<int>("Id")
@@ -608,6 +683,17 @@ namespace AChat.Infrastructure.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("AChat.Core.Models.BotDirective", b =>
+                {
+                    b.HasOne("AChat.Core.Models.Bot", "Bot")
+                        .WithMany()
+                        .HasForeignKey("BotId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Bot");
+                });
+
             modelBuilder.Entity("AChat.Core.Models.Conversation", b =>
                 {
                     b.HasOne("AChat.Core.Models.Bot", "Bot")
@@ -637,8 +723,7 @@ namespace AChat.Infrastructure.Migrations
                     b.HasOne("AChat.Core.Models.LlmPreset", "Preset")
                         .WithMany()
                         .HasForeignKey("PresetId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.SetNull);
 
                     b.HasOne("AChat.Core.Models.User", "User")
                         .WithMany()
@@ -673,6 +758,17 @@ namespace AChat.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Conversation");
+                });
+
+            modelBuilder.Entity("AChat.Core.Models.PersonaVersion", b =>
+                {
+                    b.HasOne("AChat.Core.Models.Bot", "Bot")
+                        .WithMany()
+                        .HasForeignKey("BotId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Bot");
                 });
 #pragma warning restore 612, 618
         }

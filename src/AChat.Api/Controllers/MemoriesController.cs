@@ -27,7 +27,6 @@ namespace AChat.Api.Controllers;
 [Route("api/memories")]
 public class MemoriesController(AppDbContext db, IApiKeyProtector keys, ILlmProviderFactory factory, ILogger<MemoriesController> log) : ControllerBase
 {
-    private readonly AppDbContext _db = db;
     private readonly IApiKeyProtector _keys = keys;
     private readonly ILlmProviderFactory _factory = factory;
     private readonly ILogger<MemoriesController> _log = log;

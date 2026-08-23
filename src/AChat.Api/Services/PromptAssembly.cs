@@ -38,9 +38,15 @@ public static class PromptAssembly
         return keepEnd ? "…" + cut : cut + "…";
     }
 
-    /// <summary>The persona block of every prompt (§2.4). v1: the core layer only;
-    /// evolved traits and directives join in Phase 5 (directives last so they win ties).</summary>
-    public static string BuildPersonaBlock(Bot bot)
+    /// <summary>
+    /// The persona block of every prompt (§2.4) — three layers, composed in order:
+    /// core → evolved traits → directives last, so a deliberate admin instruction
+    /// sits closest to the generation and wins ties against evolved traits.
+    /// </summary>
+    public static string BuildPersonaBlock(
+        Bot bot,
+        string? evolvedTraits = null,
+        IReadOnlyCollection<string>? directives = null)
     {
         var sb = new System.Text.StringBuilder();
         sb.Append("You are ").Append(bot.Name)
@@ -55,6 +61,18 @@ public static class PromptAssembly
         if (!string.IsNullOrWhiteSpace(bot.SpeechStyle))
         {
             sb.Append('\n').Append("How you speak:\n").Append(bot.SpeechStyle.Trim());
+        }
+        if (!string.IsNullOrWhiteSpace(evolvedTraits))
+        {
+            sb.Append("\n\nHow your friendship has shaped you (from your shared time together):\n")
+              .Append(evolvedTraits.Trim());
+        }
+        if (directives is { Count: > 0 })
+        {
+            sb.Append("\n\nStanding instructions from your creator — these always override " +
+                      "everything else above when in conflict:\n");
+            foreach (var d in directives)
+                sb.Append("- ").Append(d.Trim()).Append('\n');
         }
         return sb.ToString();
     }
@@ -129,10 +147,12 @@ public static class PromptAssembly
         DateTime utcNow,
         ConversationSummary? summary,
         PromptBudget? budget = null,
-        string? memoryBlock = null)
+        string? memoryBlock = null,
+        string? evolvedTraits = null,
+        IReadOnlyCollection<string>? directives = null)
     {
         var sb = new System.Text.StringBuilder();
-        sb.Append(BuildPersonaBlock(bot));
+        sb.Append(BuildPersonaBlock(bot, evolvedTraits, directives));
         sb.Append('\n').Append("It is now ").Append(FormatCurrentTime(utcNow, timezone)).Append('\n');
         if (!string.IsNullOrWhiteSpace(memoryBlock))
         {

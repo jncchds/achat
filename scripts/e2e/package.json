@@ -1,0 +1,10 @@
+{
+  "name": "achat-e2e",
+  "private": true,
+  "type": "module",
+  "description": "E2E test scripts for AChat — run against a live docker instance (see README)",
+  "dependencies": {
+    "@microsoft/signalr": "^10.0.11",
+    "playwright": "^1.62.1"
+  }
+}

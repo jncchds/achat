@@ -95,6 +95,7 @@ public sealed record BotDto
     public string PresetName { get; init; } = "";
     public LlmProvider Provider { get; init; }
     public string GenerationModel { get; init; } = "";
+    public bool EvolutionEnabled { get; init; }
     public DateTime CreatedAt { get; init; }
     public DateTime UpdatedAt { get; init; }
     public DateTime? LastMessageAt { get; init; }
@@ -109,6 +110,37 @@ public sealed record BotRequest
     public string? SpeechStyle { get; init; }
     public string? Greeting { get; init; }
     public int PresetId { get; init; }
+    /// <summary>Only applied on update (create defaults to on).</summary>
+    public bool? EvolutionEnabled { get; init; }
+}
+
+public sealed record DirectiveDto
+{
+    public int Id { get; init; }
+    public string Text { get; init; } = "";
+    public bool IsActive { get; init; }
+    public DateTime CreatedAt { get; init; }
+    public DateTime UpdatedAt { get; init; }
+}
+
+public sealed record DirectiveRequest
+{
+    public string Text { get; init; } = "";
+    public bool? IsActive { get; init; }
+}
+
+public sealed record PersonaVersionDto
+{
+    public int Id { get; init; }
+    public string Content { get; init; } = "";
+    public PersonaVersionSource Source { get; init; }
+    public int? InteractionId { get; init; }
+    public DateTime CreatedAt { get; init; }
+}
+
+public sealed record PersonaEditRequest
+{
+    public string Content { get; init; } = "";
 }
 
 public sealed record MemoryDto
@@ -190,7 +222,7 @@ public sealed record InteractionDetailDto
     public string? RecalledMemoryIds { get; init; }
     public int? BotId { get; init; }
     public int UserId { get; init; }
-    public int PresetId { get; init; }
+    public int? PresetId { get; init; }
     public LlmProvider Provider { get; init; }
     public string Model { get; init; } = "";
     public string Endpoint { get; init; } = "";

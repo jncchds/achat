@@ -16,8 +16,11 @@ public class LlmInteraction
     /// <summary>The user whose request triggered this call.</summary>
     public int UserId { get; set; }
 
-    /// <summary>The preset (provider + endpoint + key) that was used.</summary>
-    public int PresetId { get; set; }
+    /// <summary>
+    /// The preset (provider + endpoint + key) that was used. Nullable: the audit
+    /// log outlives presets — deleting one nulls the reference rather than blocking.
+    /// </summary>
+    public int? PresetId { get; set; }
 
     /// <summary>Provider type that was actually called.</summary>
     public LlmProvider Provider { get; set; }

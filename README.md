@@ -52,6 +52,10 @@ with the `ACHAT_` prefix and .NET nested-key convention (`ACHAT_Section__Key`):
 | `Extraction__MaxCandidates` | `10` | Cap on candidates per pass |
 | `Extraction__MaxTailMessages` | `40` | Tail size sent to the extractor |
 | `Extraction__MaxTokens` | `1024` | Output cap for the extraction call (covers reasoning-model thinking) |
+| `Evolution__MinNewMessages` | `40` | New creator messages since the last pass that trigger an evolution rewrite (§2.4) |
+| `Evolution__CooldownHours` | `12` | Cooldown between rewrites — a human edit or revert also resets it |
+| `Evolution__MaxTailMessages` | `60` | Conversation tail sent to the evolver |
+| `Evolution__MaxTokens` | `512` | Output cap for the evolution call |
 
 ## Development workflow
 
@@ -82,6 +86,37 @@ Database rules:
   `SELECT` is fine; issuing anything else by hand is not. All schema changes go through
   migrations; all data changes go through the application.
 - Automated tests may write freely to their own disposable database.
+
+## E2E scripts
+
+Verification scripts live in `scripts/e2e/` (run against a live instance, default
+`http://localhost:5001`; override with `ACHAT_BASE`):
+
+```bash
+# SignalR test client (used by the phase scripts)
+node scripts/e2e/sigtest.mjs <token> <botId> "message"
+
+# Full browser smoke test (Playwright)
+node scripts/e2e/smoke.mjs
+
+# Phase-specific E2E — start a throwaway instance with fast worker triggers first:
+docker rm -f achat-e2e
+docker run -d --name achat-e2e --network achat_default -p 5002:8080 \
+  -e ACHAT_ConnectionStrings__DefaultConnection="Host=postgres;Port=5432;Database=achat;Username=achat;Password=achat" \
+  -e ACHAT_Evolution__MinNewMessages=6 -e ACHAT_Evolution__CooldownHours=0 \
+  -e ACHAT_Extraction__MinNewMessages=2 -e ACHAT_Extraction__IdleMinutes=0 \
+  achat-achat
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase5.mjs   # PHASE5_PRESET=<id> picks the preset
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase5-mock.mjs  # offline (mock on 18999)
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase4.mjs
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase3.mjs
+```
+
+The mock LLM (`node scripts/e2e/mockllm.mjs [port]`, default 18999) serves
+`/v1/models`, `/v1/chat/completions` (purpose-aware replies) and `/v1/embeddings`
+(deterministic 768-dim vectors), and logs every request to `mock-requests.jsonl` —
+phase scripts assert prompt structure against that log. It is how the pipeline is
+verified when no real endpoint is available.
 
 ## Project layout
 
@@ -114,4 +149,11 @@ src/
   viewer (list / search / edit / pin / forget / forget-all), embedding-model lock
   (§5.7) — verified: facts planted outside the recent window are recalled by name, and
   a viewer edit flows into the bot's next answer
-- Phases 5–8: see the delivery plan in `docs/design.md` §12a
+- **Phase 5 — Evolving personality** ✅ three-layer persona (core → evolved traits →
+  directives, directives win), versioned evolved layer (history, edit, revert), slow
+  background evolution over creator conversations only (utility model, watermark,
+  cooldown, bounded by core + directives), per-bot evolution switch — verified: after
+  sustained conversation the bot's evolved traits changed, the next prompt carried the
+  layers in order, a standing directive was obeyed, and revert restored an earlier
+  version
+- Phases 6–8: see the delivery plan in `docs/design.md` §12a

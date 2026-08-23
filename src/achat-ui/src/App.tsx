@@ -3,6 +3,7 @@ import AppLayout from './layouts/AppLayout'
 import Login from './pages/Login'
 import Bots from './pages/Bots'
 import BotMemories from './pages/BotMemories'
+import BotSettings from './pages/BotSettings'
 import Chat from './pages/Chat'
 import Presets from './pages/Presets'
 import Admin from './pages/Admin'
@@ -19,6 +20,7 @@ function Protected() {
         <Route path="/bots" element={<Bots />} />
         <Route path="/bots/:botId" element={<Chat />} />
         <Route path="/bots/:botId/memories" element={<BotMemories />} />
+        <Route path="/bots/:botId/settings" element={<BotSettings />} />
         <Route path="/presets" element={<Presets />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="/admin/interactions" element={<Interactions />} />

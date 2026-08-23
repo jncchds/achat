@@ -159,7 +159,7 @@ This significantly simplifies the backend: generation can be tied to the request
 lifetime, and background work does not need to be durable or crash-safe in the way autonomous
 initiation would demand. Revisit only if reminders land.
 
-### 2.4 Bot definition and personality `[PROPOSED]`
+### 2.4 Bot definition and personality `[DECIDED — implemented in Phase 5]`
 
 A bot's identity is **three layers**, composed in order into the persona block of every
 prompt (§5.5). The split exists because the three have different authors, different
@@ -183,10 +183,10 @@ blob so each can be dated, toggled, and deleted. This is answer (b): the way the
 the bot something that sways it. Directives are injected verbatim and always win over evolved
 traits when they conflict, because they represent a deliberate decision.
 
-`[OPEN]` — how a directive is added. An explicit UI field on the bot admin tab is certain.
-The richer option is detecting them in conversation ("from now on, stop being so formal") and
-promoting them to directives automatically, with the admin able to confirm or discard.
-Recommend explicit UI first, in-conversation capture later — automatic promotion that
+`[DECIDED]` (Phase 5) — **explicit UI first**, as recommended. Directives are added,
+edited, toggled, and removed from the bot's personality page (`/bots/:id/settings`),
+stored as rows (`BotDirectives`), each dated. Toggled-off directives are kept (re-enableable)
+but not injected. In-conversation capture is **not in v1** — automatic promotion that
 misfires is worse than a form.
 
 **Evolved traits** — answer (c). A background worker maintains a short machine-written
@@ -213,15 +213,32 @@ failure mode — and slow, cumulative drift is exactly the kind you notice late.
 The admin can also edit the evolved layer directly; an edited version is flagged so the next
 evolution pass treats it as the new baseline rather than overwriting a human correction.
 
-`[OPEN]`:
+`[DECIDED]` (Phase 5) — implemented as `PersonaVersions` (one row per version, newest by Id
+is current; older versions are never mutated) with sources `Initial` (empty baseline created
+with the bot), `Evolution` (worker rewrite, carries the producing interaction's id),
+`UserEdited` (admin edit), and `Revert` (admin revert to an earlier version — the revert
+itself is visible in the history). The version history is readable and reversible from the
+personality page.
 
-- Generation parameters (temperature, top_p, max tokens) — on the bot, on the preset, or both
-  with the bot overriding?
-- Import/export format. Compatibility with an existing character-card format (e.g. SillyTavern
-  V2) is a real ecosystem advantage but a meaningful rabbit hole; those cards also assume a
-  static persona, which conflicts with the evolving model above. Recommend a simple AChat-native
-  JSON export first.
-- Should evolution be switchable off per bot, for someone who wants a fixed character?
+`[DECIDED]` (Phase 5) — the worker (`PersonaEvolutionService`) sweeps every 30s but only
+acts when **both** hold: ≥ `Evolution:MinNewMessages` (default 40) new **creator** messages
+since the last completed pass (watermark `Bot.EvolutionUpToMessageId`), and the cooldown
+`Evolution:CooldownHours` (default 12) has elapsed, measured from the newest version of
+**any** source — so a human edit or revert also resets it, protecting a correction from an
+immediate overwrite. It rewrites only the evolved layer, prompted with core + directives as
+fixed constraints, on the utility model, logged as `PersonaEvolution` (§4.4). A pass that
+returns the baseline unchanged stores nothing. The watermark advances only on success.
+Evolution can be switched off per bot (`Bot.EvolutionEnabled`, toggle on the personality
+page) for someone who wants a fixed character.
+
+Resolved `[OPEN]`s — generation parameters stay on the **preset** in v1 (bot-level override
+revisited in Phase 8); import/export is **not in v1**; the per-bot evolution switch is
+**in**, as above.
+
+Verified end-to-end (real model): after a sustained conversation, the evolved-traits layer
+was rewritten from the creator's own material, the next prompt carried the layers in order
+(core → evolved → directives), the bot obeyed a standing directive, and the admin read the
+history, edited, and reverted.
 
 ---
 
@@ -1213,19 +1230,20 @@ sharing (Phase 6) much earlier, if having a second user is important to how you 
 memory per `(BotId, UserId)` (§5.1) · bot roles and creator-owned personality (§2.5) ·
 Data Protection for API keys (§7.3) · manual DB access read-only, tests may write (§6) ·
 Grove palette (§9.2) · four providers including GoogleAIStudio (§3) · project layout and
-container shape inherited from abook (§8, §10, §11a).
+container shape inherited from abook (§8, §10, §11a) · the §2.4 personality model — three
+layers, creator-only evolution, versioned, per-bot switch — implemented in Phase 5 ·
+generation parameters on the preset in v1 (§2.4) · user timezone captured at login **and**
+set explicitly (§5.9) · §5 memory initial values as config (§5.10) · `AGENTS.md` written;
+this document stays the spec (§11a).
 
 **Still open, roughly by weight:**
 
-1. Review the §2.4 personality proposal — three layers, creator-only evolution, versioned.
-2. Review the §12a phase ordering.
-3. Remaining sharing details: cost visibility, revocation semantics, code regeneration, and
+1. Review the §12a phase ordering (Phases 0–5 are done; 6–8 remain).
+2. Remaining sharing details: cost visibility, revocation semantics, code regeneration, and
    who may read the interaction log for a shared bot. (§2.5)
-4. Message editing, deletion, and regeneration; group chats. (§2.3)
-5. Onboarding — what a bot knows at the first message of a new relationship. (§5.10.4)
-6. Bot reassignment to a preset with a different embedding model: block, or re-embed? (§5.7)
-7. Generation parameters — on the bot, the preset, or both? (§2.4)
-8. User timezone: captured at login or set explicitly? (§5.9)
-9. Whether variable-length embeddings need an indexing strategy at AChat's row counts. (§6)
-10. Tuning constants throughout §5 — all currently guesses.
-11. Does this document become AChat's `AGENTS.md`, alongside a `CLAUDE.md` for workflow? (§11a)
+3. Message editing, deletion, and regeneration; group chats. (§2.3)
+4. Onboarding — what a bot knows at the first message of a new relationship. (§5.10.4)
+5. Bot reassignment to a preset with a different embedding model: block, or re-embed? (§5.7)
+6. Whether variable-length embeddings need an indexing strategy at AChat's row counts. (§6)
+7. Tuning the ranking/extraction/evolution constants against real conversations — all
+   currently first guesses, all in config.

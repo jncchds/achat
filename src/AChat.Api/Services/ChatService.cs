@@ -144,24 +144,42 @@ public sealed class ChatService
                     queryVectors[0], _memories.TopK * 4, ct);
                 recalled = MemoryRetriever.Select(candidates, now, _memories);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            // A provider timeout is also a TaskCanceledException — swallow it only
+            // when it is not the user's stop/disconnect, so a slow embedding call
+            // degrades to a memoryless turn instead of killing the run.
+            catch (Exception ex) when (!ct.IsCancellationRequested)
             {
                 _log.LogWarning(ex, "Memory retrieval failed for bot {BotId} — continuing without memories", bot.Id);
             }
         }
 
-        // ── Prompt assembly (§5.5, §5.9) ─────────────────────────────────────────
-        // System block: persona → current time in the user's zone → memories → summary.
+        // ── Prompt assembly (§5.5, §5.9, §2.4) ─────────────────────────────────
+        // System block: persona (core → evolved traits → directives) →
+        // current time in the user's zone → memories → summary.
         var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId);
         var summary = await _db.ConversationSummaries.AsNoTracking()
             .FirstOrDefaultAsync(s => s.BotId == bot.Id && s.UserId == userId);
+
+        // The bot's current personality layers (§2.4): the latest evolved-traits
+        // version and the active directives — directives last, so they win ties.
+        var evolvedTraits = await _db.PersonaVersions.AsNoTracking()
+            .Where(v => v.BotId == bot.Id)
+            .OrderByDescending(v => v.Id)
+            .Select(v => v.Content)
+            .FirstOrDefaultAsync(ct);
+        var directives = await _db.BotDirectives.AsNoTracking()
+            .Where(d => d.BotId == bot.Id && d.IsActive)
+            .OrderBy(d => d.Id)
+            .Select(d => d.Text)
+            .ToListAsync(ct);
 
         recalled = _budget.TrimMemories(recalled);
         var memoryBlock = recalled.Count > 0
             ? MemoryRetriever.BuildMemoryBlock(recalled, now)
             : null;
         var systemBlock = PromptAssembly.BuildSystemBlock(
-            bot, user?.Timezone, now, summary, _budget, memoryBlock);
+            bot, user?.Timezone, now, summary, _budget, memoryBlock,
+            evolvedTraits, directives);
 
         // Recent history: last N turns verbatim, with gap markers where the silence
         // was long enough to be noticed (§5.9.2).
@@ -249,10 +267,14 @@ public sealed class ChatService
                 ? $"Provider returned HTTP {s}: {Truncate(ex.ErrorPayload, 2000)}"
                 : $"{ex.Message}{(ex.ErrorPayload is not null ? " — " + Truncate(ex.ErrorPayload, 2000) : "")}";
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        // A provider timeout surfaces as a TaskCanceledException even though the
+        // user did not cancel — treat it as a failed call, not a stop.
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             failed = true;
-            error = ex.Message;
+            error = ex is OperationCanceledException
+                ? "The model request timed out."
+                : ex.Message;
         }
 
         stopwatch.Stop();

@@ -18,6 +18,8 @@ public class AppDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<User> Users => Set<User>();
     public DbSet<LlmPreset> LlmPresets => Set<LlmPreset>();
     public DbSet<Bot> Bots => Set<Bot>();
+    public DbSet<BotDirective> BotDirectives => Set<BotDirective>();
+    public DbSet<PersonaVersion> PersonaVersions => Set<PersonaVersion>();
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<Memory> Memories => Set<Memory>();
@@ -77,6 +79,27 @@ public class AppDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne(x => x.Owner).WithMany().HasForeignKey(x => x.OwnerId).OnDelete(DeleteBehavior.Cascade);
             // A bot uses exactly one preset, which must belong to the same owner (§2.2).
             b.HasOne(x => x.Preset).WithMany().HasForeignKey(x => x.PresetId).OnDelete(DeleteBehavior.Restrict);
+            b.Property(x => x.EvolutionEnabled).HasDefaultValue(true);
+        });
+
+        // ── BotDirective: discrete, individually editable directives (§2.4) ────
+        modelBuilder.Entity<BotDirective>(d =>
+        {
+            d.ToTable("BotDirectives");
+            d.HasIndex(x => x.BotId);
+            d.Property(x => x.Text).HasMaxLength(2000).IsRequired();
+            d.Property(x => x.IsActive).HasDefaultValue(true);
+            d.HasOne(x => x.Bot).WithMany().HasForeignKey(x => x.BotId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── PersonaVersion: versioned evolved-traits layer (§2.4) ────────────
+        modelBuilder.Entity<PersonaVersion>(v =>
+        {
+            v.ToTable("PersonaVersions");
+            v.HasIndex(x => x.BotId);
+            v.Property(x => x.Content).IsRequired();
+            v.Property(x => x.Source).HasDefaultValue(PersonaVersionSource.Initial);
+            v.HasOne(x => x.Bot).WithMany().HasForeignKey(x => x.BotId).OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── Conversation: one continuous timeline per (BotId, UserId) (§2.3) ──
@@ -142,7 +165,9 @@ public class AppDbContext : DbContext, IDataProtectionKeyContext
             i.Property(x => x.Failed).HasDefaultValue(false);
             i.HasOne(x => x.Bot).WithMany().HasForeignKey(x => x.BotId).OnDelete(DeleteBehavior.SetNull);
             i.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
-            i.HasOne(x => x.Preset).WithMany().HasForeignKey(x => x.PresetId).OnDelete(DeleteBehavior.Restrict);
+            // The audit log outlives presets: deleting one nulls the reference
+            // rather than blocking the deletion (§4.4).
+            i.HasOne(x => x.Preset).WithMany().HasForeignKey(x => x.PresetId).OnDelete(DeleteBehavior.SetNull);
         });
 
         // ── BotAccess (§2.5) ──────────────────────────────────────────────────

@@ -238,7 +238,7 @@ public sealed class MemoryExtractionService : BackgroundService
             {
                 failed = true;
                 failure = "Embedding failed: " + ex.Message;
-                vectors = null;
+                vectors = null!;
             }
 
             if (vectors is not null)

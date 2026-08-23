@@ -987,6 +987,10 @@ button:disabled:hover { background: var(--accent); }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1rem; }
 .form-grid .span-2 { grid-template-column: span 2; }
 .form-actions { display: flex; gap: 0.6rem; margin-top: 1rem; align-items: center; flex-wrap: wrap; }
+.row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.check-row { display: flex; gap: 0.7rem; align-items: flex-start; cursor: pointer; }
+.check-row input[type="checkbox"] { margin-top: 0.25rem; width: 1.05rem; height: 1.05rem; cursor: pointer; }
+.check-row > span { line-height: 1.35; }
 .hint { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.25rem; }
 .field-result { margin-top: 0.5rem; font-size: 0.82rem; padding: 0.4rem 0.7rem; border-radius: 6px; border: 1px solid var(--border); }
 .field-result.ok { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, transparent); }

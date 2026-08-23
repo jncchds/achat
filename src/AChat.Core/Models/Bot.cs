@@ -35,6 +35,19 @@ public class Bot
     /// </summary>
     public string InviteCode { get; set; } = "";
 
+    /// <summary>
+    /// Whether the background evolution worker may maintain this bot's
+    /// evolved-traits layer (§2.4). Off for someone who wants a fixed character.
+    /// </summary>
+    public bool EvolutionEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Watermark for evolution (§2.4): the highest message Id (across the
+    /// creator's conversations) already considered by a completed evolution pass.
+    /// Null = nothing processed yet. Only the creator's messages count.
+    /// </summary>
+    public int? EvolutionUpToMessageId { get; set; }
+
     public int PresetId { get; set; }
 
     public DateTime CreatedAt { get; set; }

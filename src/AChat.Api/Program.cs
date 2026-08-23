@@ -85,6 +85,9 @@ builder.Services.AddHostedService<SummaryService>();
 builder.Services.AddSingleton(MemoryRetriever.FromConfiguration(builder.Configuration));
 builder.Services.AddHostedService<MemoryExtractionService>();
 
+// ── Personality evolution (§2.4) — slow background worker, never in the request path
+builder.Services.AddHostedService<PersonaEvolutionService>();
+
 // ── API ─────────────────────────────────────────────────────────────────────────
 builder.Services.AddControllers()
     .AddJsonOptions(o => ConfigureJsonSerializer(o.JsonSerializerOptions));

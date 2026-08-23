@@ -88,15 +88,19 @@ builder.Services.AddHttpContextAccessor();
 // ── Chat + prompt assembly (§5.5, §5.9) ─────────────────────────────────────────
 builder.Services.AddScoped<ChatService>();
 
-// ── Rolling summary worker (§5.3) — background, never in the request path ────
-builder.Services.AddHostedService<SummaryService>();
-
-// ── Memory retrieval + extraction (§5.3–5.4) ────────────────────────────────
+// ── Memory retrieval (§5.4) ──────────────────────────────────────────────────
 builder.Services.AddSingleton(MemoryRetriever.FromConfiguration(builder.Configuration));
-builder.Services.AddHostedService<MemoryExtractionService>();
 
-// ── Personality evolution (§2.4) — slow background worker, never in the request path
-builder.Services.AddHostedService<PersonaEvolutionService>();
+// ── Durable work pipeline (§12b) — extraction (§5.3), evolution (§2.4),
+//    summarisation (§5.3): producers arm the queue, handlers execute the pass,
+//    one worker claims and records outcomes (backoff / dead-letter).
+builder.Services.AddScoped<IWorkProducer, ExtractionProducer>();
+builder.Services.AddScoped<IWorkProducer, EvolutionProducer>();
+builder.Services.AddScoped<IWorkProducer, SummaryProducer>();
+builder.Services.AddScoped<IWorkHandler, ExtractionHandler>();
+builder.Services.AddScoped<IWorkHandler, EvolutionHandler>();
+builder.Services.AddScoped<IWorkHandler, SummaryHandler>();
+builder.Services.AddHostedService<WorkQueueService>();
 
 // ── Interaction-log retention (§4.4, Phase 8) — periodic pruning of the audit log
 builder.Services.AddHostedService<InteractionRetentionService>();

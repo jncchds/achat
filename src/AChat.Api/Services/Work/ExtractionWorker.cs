@@ -1,165 +1,150 @@
-using System.Collections.Concurrent;
 using AChat.Core;
 using AChat.Core.Interfaces;
 using AChat.Core.Models;
 using AChat.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
-using Pgvector;
 
 namespace AChat.Api.Services;
 
 /// <summary>
-/// Memory-extraction worker (§5.3). A background service — not in the request path,
-/// a turn never waits on it. It reads the conversation's un-extracted tail (messages
-/// after <see cref="Conversation.ExtractionUpToMessageId"/>) once either enough
-/// messages have accumulated (<c>Extraction:MinNewMessages</c>) or the conversation
-/// has gone quiet (<c>Extraction:IdleMinutes</c>), so a fast back-and-forth produces
-/// one extraction pass rather than twenty.
+/// Arms extraction work (§12b): re-evaluates the trigger (enough new messages, or
+/// the conversation went quiet) and upserts a <see cref="WorkItem"/>. No LLM work
+/// happens here — the <see cref="ExtractionHandler"/> executes the pass.
 ///
-/// Method: one LLM call (utility model when set) over the new messages, prompted for
-/// structured JSON — durable facts and meaningful events, not pleasantries. Each
-/// accepted candidate is embedded, deduplicated against the scope (drop ≥
-/// <c>Memory:DedupThreshold</c>; supersede ≥ <c>Memory:SupersedeThreshold</c> unless
-/// a human edited the existing row, §5.6), and stored. The watermark advances only
-/// after a successful pass; a failed pass leaves it untouched so the tail retries.
-/// Every call is logged to the interaction log (§4.4, purpose <see cref="InteractionPurpose.MemoryExtraction"/>).
+/// Bots whose preset lacks an embedding or generation model are skipped: that is
+/// a configuration state, not a failure, so it must not burn attempts or
+/// dead-letter (§12b).
 /// </summary>
-public sealed class MemoryExtractionService : BackgroundService
+public sealed class ExtractionProducer : IWorkProducer
 {
-    private readonly IServiceScopeFactory _scopes;
     private readonly IConfiguration _config;
-    private readonly ILogger<MemoryExtractionService> _log;
-    private readonly ConcurrentDictionary<int, byte> _inFlight = new();
+    public WorkKind Kind => WorkKind.Extraction;
+    public int MaxAttempts { get; }
 
-    private static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(15);
-
-    public int MinNewMessages { get; }
-    public int IdleMinutes { get; }
-    public int MaxCandidates { get; }
-    public int MaxTailMessages { get; }
-    public float DedupThreshold { get; }
-    public float SupersedeThreshold { get; }
-
-    public MemoryExtractionService(IServiceScopeFactory scopes, IConfiguration config, ILogger<MemoryExtractionService> log)
+    public ExtractionProducer(IConfiguration config)
     {
-        _scopes = scopes;
         _config = config;
-        _log = log;
-        MinNewMessages = config.GetValue("Extraction:MinNewMessages", 8);
-        IdleMinutes = config.GetValue("Extraction:IdleMinutes", 10);
-        MaxCandidates = config.GetValue("Extraction:MaxCandidates", 10);
-        MaxTailMessages = config.GetValue("Extraction:MaxTailMessages", 40);
-        DedupThreshold = config.GetValue("Memory:DedupThreshold", 0.92f);
-        SupersedeThreshold = config.GetValue("Memory:SupersedeThreshold", 0.85f);
+        MaxAttempts = config.GetValue("Work:MaxAttempts", 5);
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    public async Task ProduceAsync(AppDbContext db, CancellationToken ct)
     {
-        _log.LogInformation(
-            "Memory extraction started (sweep every {Interval}s; trigger ≥ {M} new messages or idle ≥ {T} min)",
-            SweepInterval.TotalSeconds, MinNewMessages, IdleMinutes);
-        try
-        {
-            using var timer = new PeriodicTimer(SweepInterval);
-            while (await timer.WaitForNextTickAsync(stoppingToken))
-            {
-                try { await SweepAsync(stoppingToken); }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
-                catch (Exception ex)
-                {
-                    _log.LogWarning(ex, "Extraction sweep failed");
-                }
-            }
-        }
-        catch (OperationCanceledException) { /* shutting down */ }
-    }
-
-    private async Task SweepAsync(CancellationToken ct)
-    {
-        using var scope = _scopes.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var keys = scope.ServiceProvider.GetRequiredService<IApiKeyProtector>();
-        var factory = scope.ServiceProvider.GetRequiredService<ILlmProviderFactory>();
+        var minNewMessages = _config.GetValue("Extraction:MinNewMessages", 8);
+        var idleMinutes = _config.GetValue("Extraction:IdleMinutes", 10);
 
         var now = DateTime.UtcNow;
-        var idleCutoff = now.AddMinutes(-IdleMinutes);
+        var idleCutoff = now.AddMinutes(-idleMinutes);
 
-        // Conversations with an un-extracted tail.
         var conversations = await db.Conversations
             .AsNoTracking()
             .Where(c => c.LastMessageAt != null)
-            .Select(c => new { c.Id, c.BotId, c.UserId, c.LastMessageAt, c.ExtractionUpToMessageId })
+            .Select(c => new { c.Id, c.BotId, c.LastMessageAt, c.ExtractionUpToMessageId })
             .ToListAsync(ct);
 
-        var candidates = new List<(int ConversationId, int BotId, int UserId)>();
         foreach (var c in conversations)
         {
-            if (c.LastMessageAt is not { } last) continue;
             var newCount = await db.Messages
                 .CountAsync(m => m.ConversationId == c.Id && m.Id > c.ExtractionUpToMessageId, ct);
             if (newCount < 2) continue;
 
-            var triggered = newCount >= MinNewMessages
-                || (last <= idleCutoff && newCount >= 2);
+            var triggered = newCount >= minNewMessages
+                || (c.LastMessageAt <= idleCutoff && newCount >= 2);
             if (!triggered) continue;
-            candidates.Add((c.Id, c.BotId, c.UserId));
-        }
 
-        foreach (var (conversationId, botId, _) in candidates)
-        {
-            if (!_inFlight.TryAdd(conversationId, 0)) continue;
-            try
-            {
-                await ExtractAsync(db, keys, factory, conversationId, botId, ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "Extraction failed for conversation {ConversationId}", conversationId);
-            }
-            finally
-            {
-                _inFlight.TryRemove(conversationId, out _);
-            }
+            // A preset that cannot extract (no embedding or generation model) is a
+            // configuration state — skip it rather than queueing doomed work.
+            var models = await db.Bots
+                .Where(b => b.Id == c.BotId)
+                .Select(b => new { G = b.Preset.GenerationModel, E = b.Preset.EmbeddingModel })
+                .FirstOrDefaultAsync(ct);
+            if (models is null || string.IsNullOrWhiteSpace(models.G) || string.IsNullOrWhiteSpace(models.E))
+                continue;
+
+            await WorkQueue.UpsertAsync(db, Kind, c.Id, MaxAttempts, ct);
         }
     }
+}
 
-    private async Task ExtractAsync(
-        AppDbContext db, IApiKeyProtector keys, ILlmProviderFactory factory,
-        int conversationId, int botId, CancellationToken ct)
+/// <summary>
+/// Memory-extraction pass (§5.3, executed by the durable queue per §12b). One LLM
+/// call (utility model when set) over the conversation's un-extracted tail,
+/// prompted for structured JSON — durable facts and meaningful events, not
+/// pleasantries. Each accepted candidate is embedded, deduplicated against the
+/// scope (drop ≥ <c>Memory:DedupThreshold</c>; supersede ≥
+/// <c>Memory:SupersedeThreshold</c> unless a human edited the existing row,
+/// §5.6), and stored.
+///
+/// The watermark advances only on success; a failed pass leaves it untouched so
+/// the tail retries (now with backoff and a cap, §12b). Every call is logged to
+/// the interaction log (§4.4, purpose <see cref="InteractionPurpose.MemoryExtraction"/>).
+/// </summary>
+public sealed class ExtractionHandler : IWorkHandler
+{
+    private readonly IApiKeyProtector _keys;
+    private readonly ILlmProviderFactory _factory;
+    private readonly IConfiguration _config;
+    private readonly ILogger<ExtractionHandler> _log;
+
+    public WorkKind Kind => WorkKind.Extraction;
+
+    public ExtractionHandler(
+        IApiKeyProtector keys, ILlmProviderFactory factory,
+        IConfiguration config, ILogger<ExtractionHandler> log)
+    {
+        _keys = keys;
+        _factory = factory;
+        _config = config;
+        _log = log;
+    }
+
+    public async Task<WorkOutcome> ExecuteAsync(AppDbContext db, WorkItem item, CancellationToken ct)
     {
         var conversation = await db.Conversations
             .AsNoTracking()
-            .FirstOrDefaultAsync(c => c.Id == conversationId, ct);
-        if (conversation is null) return;
+            .FirstOrDefaultAsync(c => c.Id == item.ConversationId, ct);
+        if (conversation is null) return WorkOutcome.Ok; // gone — stale claim
 
+        return await ExtractAsync(db, item.ConversationId, conversation.BotId, ct);
+    }
+
+    private async Task<WorkOutcome> ExtractAsync(
+        AppDbContext db, int conversationId, int botId, CancellationToken ct)
+    {
+        var conversation = await db.Conversations
+            .AsNoTracking()
+            .FirstAsync(c => c.Id == conversationId, ct);
         var bot = await db.Bots.Include(b => b.Preset)
             .FirstOrDefaultAsync(b => b.Id == botId, ct);
-        if (bot?.Preset is null) return;
+        if (bot?.Preset is null) return WorkOutcome.Ok; // the bot or its preset is gone — stale claim
         var preset = bot.Preset;
         if (string.IsNullOrWhiteSpace(preset.EmbeddingModel))
-            return; // no embedding model on the preset — nothing to store against (§5.4)
-        if (string.IsNullOrWhiteSpace(preset.GenerationModel)) return;
+            return WorkOutcome.Ok; // no embedding model on the preset — nothing to store against (§5.4)
+        if (string.IsNullOrWhiteSpace(preset.GenerationModel)) return WorkOutcome.Ok;
+
+        var maxCandidates = _config.GetValue("Extraction:MaxCandidates", 10);
+        var maxTailMessages = _config.GetValue("Extraction:MaxTailMessages", 40);
+        var dedupThreshold = _config.GetValue("Memory:DedupThreshold", 0.92f);
+        var supersedeThreshold = _config.GetValue("Memory:SupersedeThreshold", 0.85f);
 
         var watermark = conversation.ExtractionUpToMessageId;
         var tail = await db.Messages
             .AsNoTracking()
             .Where(m => m.ConversationId == conversationId && m.Id > watermark)
             .OrderBy(m => m.Id)
-            .Take(MaxTailMessages)
+            .Take(maxTailMessages)
             .ToListAsync(ct);
-        if (tail.Count < 2) return;
+        if (tail.Count < 2) return WorkOutcome.Ok;
 
         // ── Provider (utility model when set, §3) ─────────────────────────────
         string? apiKey = null;
         if (preset.ApiKeyEncrypted is not null)
         {
-            try { apiKey = keys.Unprotect(Convert.ToBase64String(preset.ApiKeyEncrypted)); }
+            try { apiKey = _keys.Unprotect(Convert.ToBase64String(preset.ApiKeyEncrypted)); }
             catch { apiKey = null; }
         }
 
         var model = string.IsNullOrWhiteSpace(preset.UtilityModel) ? preset.GenerationModel : preset.UtilityModel;
-        var provider = factory.Create(new LlmPresetConfig
+        var provider = _factory.Create(new LlmPresetConfig
         {
             Provider = preset.Provider,
             Endpoint = preset.BaseEndpoint,
@@ -172,7 +157,6 @@ public sealed class MemoryExtractionService : BackgroundService
             TimeoutMs = preset.TimeoutMs ?? 120_000,
         });
 
-        var firstAt = tail[0].CreatedAt;
         var transcript = string.Join("\n", tail.Select(m =>
             $"{(m.Role == MessageRole.User ? "user" : "friend")} ({m.CreatedAt.ToUniversalTime():ddd d MMM} {m.CreatedAt.Hour:00}:{m.CreatedAt.Minute:00}): {m.Content}"));
 
@@ -210,7 +194,7 @@ public sealed class MemoryExtractionService : BackgroundService
         {
             completion = await provider.ChatAsync(request, ct);
             rawResponse = completion.Content ?? "";
-            candidates = ParseCandidates(rawResponse, MaxCandidates);
+            candidates = ParseCandidates(rawResponse, maxCandidates);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -246,7 +230,7 @@ public sealed class MemoryExtractionService : BackgroundService
                 for (var i = 0; i < candidates.Count; i++)
                 {
                     var (content, kind, importance) = candidates[i];
-                    var vector = new Vector(vectors[i]);
+                    var vector = new Pgvector.Vector(vectors[i]);
 
                     // Nearest existing memory in scope (current model only, §5.7).
                     var nearest = await db.Database.SqlQueryRaw<NearestMemoryRow>(
@@ -266,7 +250,8 @@ public sealed class MemoryExtractionService : BackgroundService
                         .AsNoTracking()
                         .FirstOrDefaultAsync(ct);
 
-                    var action = Decide(nearest?.Sim ?? 0f, nearest is null ? null : (MemorySource)nearest.Source);
+                    var action = Decide(nearest?.Sim ?? 0f, nearest is null ? null : (MemorySource)nearest.Source,
+                        dedupThreshold, supersedeThreshold);
                     if (action == CandidateAction.Drop) continue;
 
                     var memory = new Memory
@@ -329,9 +314,12 @@ public sealed class MemoryExtractionService : BackgroundService
         });
         await db.SaveChangesAsync(ct);
 
-        if (!failed)
-            _log.LogInformation("Extraction for conversation {ConversationId}: {Stored} stored, {Superseded} superseded (from {Count} candidates)",
-                conversationId, storedIds.Count, supersededIds.Count, candidates.Count);
+        if (failed)
+            return WorkOutcome.Fail(failure);
+
+        _log.LogInformation("Extraction for conversation {ConversationId}: {Stored} stored, {Superseded} superseded (from {Count} candidates)",
+            conversationId, storedIds.Count, supersededIds.Count, candidates.Count);
+        return WorkOutcome.Ok;
     }
 
     /// <summary>
@@ -408,5 +396,3 @@ public sealed class MemoryExtractionService : BackgroundService
 
 /// <summary>Nearest-memory projection row for the raw-SQL dedup query (Source is an int — EF's default enum mapping).</summary>
 public sealed record NearestMemoryRow(int Id, int Source, float Sim);
-
-

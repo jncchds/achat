@@ -44,7 +44,8 @@ src/achat-ui/             React 19 + TypeScript + Vite SPA (plain CSS, Grove pal
 
 - E2E scripts live in `scripts/e2e/` (see the README *E2E scripts* section):
   `smoke.mjs` (Playwright, headless), `sigtest.mjs` (SignalR client), per-phase
-  scripts (`phase3`–`phase6.mjs`, `phase7-verify.mjs`, `phase8-verify.mjs`),
+  scripts (`phase3`–`phase6.mjs`, `phase7-verify.mjs`, `phase8-verify.mjs`,
+  `workqueue.mjs`),
   `phase5-mock.mjs` (offline pipeline check), and `mockllm.mjs` (OpenAI-compatible
   mock with a request log). Run against the containerized app at
   `http://localhost:5001` (admin/admin bootstrap); the phase scripts point at a

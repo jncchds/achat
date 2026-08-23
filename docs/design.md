@@ -1269,6 +1269,100 @@ Group chats. Character-card import. Anything in §1.3.
 `[OPEN]` — is this ordering right for how you want to work? The main alternative is pulling
 sharing (Phase 6) much earlier, if having a second user is important to how you test.
 
+## 12b. Durable Work Pipeline `[DECIDED]`
+
+**Problem.** The background passes (memory extraction §5.3, persona evolution §2.4,
+summarisation §5.3) were fire-and-forget: a failed pass — provider down, quota, malformed
+JSON — logged a warning and the next sweep hammered it again. No backoff, no attempt cap,
+no dead letter, and nothing in the database to show that work had failed. And when a chat
+generation failed, the turn was a dead end: the user's message sat in the timeline with no
+reply and no way to ask again without retyping.
+
+What the product needed was not durable *storage* — that is already true: the watermarks
+advance only inside the success transaction (at-least-once), the user's message is committed
+before the LLM call, and every pass re-derives its tail from the database, so a container
+restart loses nothing. It needed durable *retry*: memory, backoff, a cap, and visibility.
+
+**Decision.** A small work table in the same Postgres — the durable-queue pattern without a
+messaging fabric. Wolverine (JasperFx) et al. solve the same shape of problem, but they are
+messaging frameworks for side-effects between services; here every job is *read DB → call
+LLM → write DB* inside one process, so a table plus a worker gives the same guarantees
+(at-least-once, backoff, dead-letter, observability) without the abstraction cost. The
+framework is the right tool when v2 delivers *external* side-effects (notifications,
+reminders, proactive messaging) — an outbox pattern for delivery. Until then, not needed.
+
+### The table
+
+```
+WorkItems
+  Id             int PK
+  Kind           enum  Extraction | Evolution | Summary
+  ConversationId int — the target conversation (evolution: the creator's conversation,
+                        which is unique per bot — §2.3)
+  Status         enum  Pending | Running | Dead
+  Attempts       int   (incremented on claim)
+  MaxAttempts    int   (captured from config at creation, default 5)
+  NextTryAt      timestamptz — due time; backoff on failure
+  LastFailure    text? (≤ 2000 chars — the shaped provider error, parse failures included)
+  CreatedAt / UpdatedAt
+  UNIQUE (Kind, ConversationId) — at most one live work item per (kind, conversation)
+```
+
+### Mechanics
+
+- **Producers** (one per kind, the existing sweeps minus their execution): on each tick they
+  re-evaluate their trigger (watermark thresholds, cooldown, summary tail) and *upsert* a
+  `Pending` work item — `INSERT … skip if one already exists for that (Kind, ConversationId)`
+  in any status. A `Dead` item is therefore **frozen until an admin acts** (retry or
+  discard): the queue never hammers a persistently failing target by itself.
+- **Worker**: one hosted service. Each tick it runs the producers, then claims the oldest
+  due `Pending` item, marks it `Running` with `Attempts += 1`, and dispatches to the
+  kind's handler. The handler re-validates its trigger (conditions may no longer hold — the
+  watermark may have advanced, evolution may have been switched off) and no-ops-succeeds if
+  they don't, so a stale claim self-heals.
+- **Outcomes.** Success → the row is deleted (the handler has already advanced its
+  watermark / written its version / rewritten the summary). Failure → `LastFailure` is
+  stored, and either `Status = Dead` (attempts exhausted) or back to `Pending` with
+  `NextTryAt = now + min(MaxDelay, BaseDelay · 2^attempts) + jitter`.
+- **At-least-once, idempotent handlers.** Extraction dedups on similarity (§5.3); evolution
+  appends a version (re-claiming after a post-commit crash finds an empty tail and no-ops);
+  summarisation is an in-place rewrite of the same input. A double execution is harmless.
+- **Single-instance claim.** The claim is optimistic (read-then-mark), which is correct for
+  the one-app-container deployment (the same assumption §6 already makes for migration
+  application). A multi-replica deployment would need `FOR UPDATE SKIP LOCKED`; worst case
+  today is duplicate work, not corruption — the handlers are idempotent.
+- **Every LLM call is still logged** (§4.4) — a `Dead` row and its interaction-log rows
+  cross-reference each other, so the log stays the debugging surface.
+
+### Chat retry ("try again")
+
+A failed or stopped turn is no longer a dead end. `ChatHub.RetryLastAsync(botId)` re-runs
+generation for the **last user message that has no complete reply**:
+
+- last message is a user turn → retry it (no new user message is appended);
+- last message is a partial assistant turn (`IsComplete = false`) → the partial is deleted
+  and the user turn before it is retried;
+- last turn already complete → `NothingToRetryException` (the client shows "nothing to retry").
+
+The kill switch and the usage quota apply to a retry exactly as to a fresh turn — it spends
+the key. The UI shows a *Try again* button on the failed turn.
+
+### Admin surface
+
+- `GET /api/admin/work` — the queue: kind, bot, status, attempts, next try, last failure.
+- `POST /api/admin/work/{id}/retry` — re-arm a `Dead` (or overdue `Pending`) item: attempts
+  reset, due now.
+- `DELETE /api/admin/work/{id}` — discard: the row is removed and the producer may re-arm
+  it on the next sweep if its trigger still holds.
+
+### Config
+
+| Key | Default | Description |
+|---|---|---|
+| `Work:MaxAttempts` | `5` | Failed attempts before a work item dead-letters |
+| `Work:BaseDelaySeconds` | `60` | First retry delay; doubles per attempt |
+| `Work:MaxDelaySeconds` | `3600` | Retry-delay cap |
+
 ## 13. Open Questions — Consolidated
 
 **Resolved so far:** tool calling out of v1 (§4.6) · proactive messaging out of v1 (§2.3) ·
@@ -1284,7 +1378,10 @@ share one implementation (§3, §4.1) · **Phase 8**: two roles admin/user (§7.
 disable/reset/delete users with self-lockout and audit-log guards (§7.4), per-bot kill switch
 + usage quota + per-user usage visibility (§2.5), interaction-log retention via a background
 worker (§4.4), transient-failure retry with backoff (§4.5), non-root container, accessibility
-pass, and backup guidance.
+pass, and backup guidance · **§12b**: the durable work pipeline — background passes
+(extraction / evolution / summarisation) queue as `WorkItems` with backoff, an attempt
+cap, and dead-lettering into the admin panel; a failed chat turn is re-runnable via
+"try again" (`RetryLastAsync`) — implemented and verified end-to-end.
 
 **Still open, roughly by weight:**
 

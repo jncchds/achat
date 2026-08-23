@@ -249,6 +249,29 @@ export const updateBotSettings = (id: number, s: { suspended?: boolean; maxInter
 export const getBotUsage = (id: number) =>
   http.get<BotUsage>(`/api/bots/${id}/usage`).then(r => r.data)
 
+// ── Background work queue (§12b) ─────────────────────────────────────────────
+
+export interface WorkItem {
+  id: number
+  kind: 'Extraction' | 'Evolution' | 'Summary'
+  conversationId: number
+  botId: number
+  botName: string
+  status: 'Pending' | 'Running' | 'Dead'
+  attempts: number
+  maxAttempts: number
+  nextTryAt: string
+  lastFailure: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export const listWork = () =>
+  http.get<WorkItem[]>('/api/admin/work').then(r => r.data)
+export const retryWork = (id: number) =>
+  http.post<WorkItem>(`/api/admin/work/${id}/retry`).then(r => r.data)
+export const discardWork = (id: number) => http.delete(`/api/admin/work/${id}`)
+
 // ── Memories (§5.6) ───────────────────────────────────────────────────────────
 export const listMemories = (botId: number, search?: string) =>
   http.get<Memory[]>('/api/memories', { params: { botId, search: search || undefined } }).then(r => r.data)

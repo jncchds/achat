@@ -310,7 +310,7 @@ public class ExtractionLogicTests
             + "42\n"
             + "]\n```\nHope that helps!";
 
-        var result = MemoryExtractionService.ParseCandidates(raw, max: 10);
+        var result = ExtractionHandler.ParseCandidates(raw, max: 10);
         Assert.Single(result);
         Assert.Equal("User's cat is named Pixel", result[0].Content);
         Assert.Equal(MemoryKind.Fact, result[0].Kind);
@@ -321,7 +321,7 @@ public class ExtractionLogicTests
     public void ParseCandidates_clamps_importance_and_respects_max()
     {
         var raw = "[{\"content\":\"a\",\"importance\":99},{\"content\":\"b\"},{\"content\":\"c\"}]";
-        var result = MemoryExtractionService.ParseCandidates(raw, max: 2);
+        var result = ExtractionHandler.ParseCandidates(raw, max: 2);
         Assert.Equal(2, result.Count);
         Assert.Equal(5, result[0].Importance); // clamped to 1..5
     }
@@ -329,30 +329,30 @@ public class ExtractionLogicTests
     [Fact]
     public void ParseCandidates_returns_empty_on_garbage()
     {
-        Assert.Empty(MemoryExtractionService.ParseCandidates("no json here", 5));
-        Assert.Empty(MemoryExtractionService.ParseCandidates("[{broken", 5));
+        Assert.Empty(ExtractionHandler.ParseCandidates("no json here", 5));
+        Assert.Empty(ExtractionHandler.ParseCandidates("[{broken", 5));
     }
 
     [Fact]
     public void Decide_drops_duplicates_and_respects_human_edits()
     {
         // Near-identical → always a duplicate, even over a human edit.
-        Assert.Equal(MemoryExtractionService.CandidateAction.Drop,
-            MemoryExtractionService.Decide(0.95f, MemorySource.Extraction));
-        Assert.Equal(MemoryExtractionService.CandidateAction.Drop,
-            MemoryExtractionService.Decide(0.95f, MemorySource.UserEdited));
+        Assert.Equal(ExtractionHandler.CandidateAction.Drop,
+            ExtractionHandler.Decide(0.95f, MemorySource.Extraction));
+        Assert.Equal(ExtractionHandler.CandidateAction.Drop,
+            ExtractionHandler.Decide(0.95f, MemorySource.UserEdited));
 
         // Similar but not identical → supersede…
-        Assert.Equal(MemoryExtractionService.CandidateAction.Supersede,
-            MemoryExtractionService.Decide(0.90f, MemorySource.Extraction));
+        Assert.Equal(ExtractionHandler.CandidateAction.Supersede,
+            ExtractionHandler.Decide(0.90f, MemorySource.Extraction));
 
         // …unless a human edited the existing row (§5.6).
-        Assert.Equal(MemoryExtractionService.CandidateAction.Drop,
-            MemoryExtractionService.Decide(0.90f, MemorySource.UserEdited));
+        Assert.Equal(ExtractionHandler.CandidateAction.Drop,
+            ExtractionHandler.Decide(0.90f, MemorySource.UserEdited));
 
         // Unrelated → fresh insert.
-        Assert.Equal(MemoryExtractionService.CandidateAction.Insert,
-            MemoryExtractionService.Decide(0.50f, MemorySource.Extraction));
+        Assert.Equal(ExtractionHandler.CandidateAction.Insert,
+            ExtractionHandler.Decide(0.50f, MemorySource.Extraction));
     }
 }
 
@@ -441,27 +441,27 @@ public class EvolutionTriggerTests
     [Fact]
     public void Triggers_when_enough_new_messages_and_no_versions_yet()
     {
-        Assert.True(PersonaEvolutionService.ShouldEvolve(50, null, 40, Cutoff));
+        Assert.True(EvolutionHandler.ShouldEvolve(50, null, 40, Cutoff));
     }
 
     [Fact]
     public void Does_not_trigger_below_the_message_threshold()
     {
-        Assert.False(PersonaEvolutionService.ShouldEvolve(10, null, 40, Cutoff));
+        Assert.False(EvolutionHandler.ShouldEvolve(10, null, 40, Cutoff));
     }
 
     [Fact]
     public void Does_not_trigger_during_the_cooldown()
     {
         var recent = Now.AddMinutes(-30); // a version written half an hour ago
-        Assert.False(PersonaEvolutionService.ShouldEvolve(50, recent, 40, Cutoff));
+        Assert.False(EvolutionHandler.ShouldEvolve(50, recent, 40, Cutoff));
     }
 
     [Fact]
     public void Triggers_once_the_cooldown_has_elapsed()
     {
         var old = Now.AddHours(-24);
-        Assert.True(PersonaEvolutionService.ShouldEvolve(50, old, 40, Cutoff));
+        Assert.True(EvolutionHandler.ShouldEvolve(50, old, 40, Cutoff));
     }
 
     [Fact]
@@ -470,6 +470,6 @@ public class EvolutionTriggerTests
         // The newest version is a fresh human edit — the correction must not be
         // overwritten by an immediate evolution pass.
         var freshEdit = Now.AddMinutes(-5);
-        Assert.False(PersonaEvolutionService.ShouldEvolve(50, freshEdit, 40, Cutoff));
+        Assert.False(EvolutionHandler.ShouldEvolve(50, freshEdit, 40, Cutoff));
     }
 }

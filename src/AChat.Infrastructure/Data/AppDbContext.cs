@@ -27,6 +27,7 @@ public class AppDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<LlmInteraction> LlmInteractions => Set<LlmInteraction>();
     public DbSet<BotAccess> BotAccesses => Set<BotAccess>();
     public DbSet<AccessRequest> AccessRequests => Set<AccessRequest>();
+    public DbSet<WorkItem> WorkItems => Set<WorkItem>();
 
     // Data Protection key ring (added by Microsoft.AspNetCore.DataProtection.EntityFrameworkCore).
     public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
@@ -179,6 +180,21 @@ public class AppDbContext : DbContext, IDataProtectionKeyContext
             a.HasIndex(x => new { x.BotId, x.UserId }).IsUnique();
             a.HasOne(x => x.Bot).WithMany().HasForeignKey(x => x.BotId).OnDelete(DeleteBehavior.Cascade);
             a.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── WorkItem: the durable background-work queue (§12b) ────────────────────
+        modelBuilder.Entity<WorkItem>(w =>
+        {
+            w.ToTable("WorkItems");
+            // One live item per (kind, conversation) — the producer's upsert key.
+            w.HasIndex(x => new { x.Kind, x.ConversationId }).IsUnique();
+            // The worker's claim: due pending items, oldest first.
+            w.HasIndex(x => new { x.Status, x.NextTryAt });
+            w.Property(x => x.Kind).HasDefaultValue(WorkKind.Extraction);
+            w.Property(x => x.Status).HasDefaultValue(WorkStatus.Pending);
+            w.Property(x => x.Attempts).HasDefaultValue(0);
+            w.Property(x => x.MaxAttempts).HasDefaultValue(5);
+            w.Property(x => x.LastFailure).HasMaxLength(2000);
         });
 
         // ── AccessRequest (§2.5) ──────────────────────────────────────────────

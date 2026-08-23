@@ -59,6 +59,10 @@ with the `ACHAT_` prefix and .NET nested-key convention (`ACHAT_Section__Key`):
 | `Evolution__MaxTokens` | `512` | Output cap for the evolution call |
 | `Retention__InteractionDays` | `90` | Prune audit-log interactions older than this many days; `0` = keep forever (§4.4) |
 | `Retention__IntervalHours` | `6` | How often the retention worker runs |
+| `Work__TickSeconds` | `5` | How often the work queue arms due work and claims items (§12b) |
+| `Work__MaxAttempts` | `5` | Failed attempts before a work item dead-letters |
+| `Work__BaseDelaySeconds` | `60` | First retry delay; doubles per attempt (±10% jitter) |
+| `Work__MaxDelaySeconds` | `3600` | Retry-delay cap |
 
 ## Development workflow
 
@@ -119,7 +123,13 @@ ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase4.mjs
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase3.mjs
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase7-verify.mjs  # new providers against a live endpoint
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase8-verify.mjs  # disable/reset, kill switch, quota, usage
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/workqueue.mjs      # dead-endpoint → dead-letter → try-again → admin retry
 ```
+
+`workqueue.mjs` is fastest with a fast queue: add `-e ACHAT_Work__TickSeconds=2
+-e ACHAT_Work__MaxAttempts=3 -e ACHAT_Work__BaseDelaySeconds=2 -e
+ACHAT_Work__MaxDelaySeconds=8` to the throwaway instance, and point its preset at a
+keyless endpoint (the script flips the endpoint dead, then to a working one).
 
 The mock LLM (`node scripts/e2e/mockllm.mjs [port]`, default 18999) serves
 `/v1/models`, `/v1/chat/completions` (purpose-aware replies) and `/v1/embeddings`
@@ -183,6 +193,15 @@ src/
   accessibility pass, backup guidance — verified: a disabled user is refused at login,
   a paused bot stops answering, a quota-capped bot stops at the cap, and the usage
   view breaks spend down by user
+- **Durable work pipeline (§12b)** ✅ memory extraction, persona evolution, and
+  summarisation now run through a durable background-work queue: a failed pass
+  retries with **backoff** and an **attempt cap**, then **dead-letters** into the
+  admin panel instead of hammering the provider; admins can **retry** or
+  **discard** any item. A failed chat turn is no longer a dead end — **"Try
+  again"** re-runs the last unanswered turn — verified: a dead endpoint dead-
+  letters extraction (3/3 attempts, visible failure), "try again" succeeds once
+  the endpoint is fixed, an admin retry re-arms the pass, memories land, and the
+  queue clears
 
 ## Backing up
 

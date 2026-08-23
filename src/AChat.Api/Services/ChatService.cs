@@ -62,36 +62,8 @@ public sealed class ChatService
         if (content.Length == 0)
             throw new ArgumentException("Message is empty.");
 
-        // The bot is usable by its owner or by a user granted access via an approved
-        // invite code (§2.5); everyone else gets not-found, not forbidden.
-        var bot = await _db.Bots.Include(b => b.Preset)
-            .FirstOrDefaultAsync(b => b.Id == botId
-                && (b.OwnerId == userId
-                    || _db.BotAccesses.Any(a => a.BotId == b.Id && a.UserId == userId)))
-            ?? throw new KeyNotFoundException($"Bot {botId} not found for user {userId}.");
-        var preset = bot.Preset;
-
-        // ── Kill switch + usage quota (§12a, §2.5) ─────────────────────────────
-        // Checked before any persistence or LLM call: a suspended/quota-exceeded bot
-        // spends no key and logs no interaction. The message reaches the client as a
-        // chat.failed notice.
-        if (bot.Suspended)
-            throw new BotUnavailableException(
-                "This bot has been paused by its creator. Please try again later.")
-            {
-                Suspended = true,
-            };
-        if (bot.MaxInteractions is > 0)
-        {
-            var used = await _db.LlmInteractions.CountAsync(i => i.BotId == bot.Id);
-            if (used >= bot.MaxInteractions)
-                throw new BotUnavailableException(
-                    $"This bot has reached its usage limit ({bot.MaxInteractions} interactions). " +
-                    "Ask its creator to raise the limit in the bot settings.")
-                {
-                    QuotaExceeded = true,
-                };
-        }
+        var bot = await ResolveBotAsync(botId, userId);
+        await EnsureUsableAsync(bot);
 
         // ── Timeline: one continuous conversation per (bot, user) (§2.3) ────────
         var conversation = await _db.Conversations
@@ -121,6 +93,130 @@ public sealed class ChatService
 
         // The user's turn is on the record — the client can now show the run as started.
         if (onStart is not null) await onStart(userMessage.Id);
+
+        return await RunGenerationAsync(bot, userId, conversation, userMessage,
+            onContentDelta, onReasoningDelta, ct);
+    }
+
+    /// <summary>
+    /// "Try again" (§12b): re-run generation for the last user message that has no
+    /// complete reply — a failed turn is no longer a dead end.
+    ///
+    /// - last message is a user turn (no reply at all) → retry it;
+    /// - last message is a partial assistant turn (<c>IsComplete = false</c>, a stop
+    ///   or a failure) → the partial is deleted and the user turn before it is
+    ///   retried;
+    /// - the last turn already completed → <see cref="NothingToRetryException"/>.
+    ///
+    /// No new user message is appended — the timeline keeps its shape. The kill
+    /// switch and the usage quota apply exactly as to a fresh turn: a retry spends
+    /// the key.
+    /// </summary>
+    public async Task<ChatRunResult> RetryLastAsync(
+        int botId,
+        int userId,
+        Func<int, Task> onStart,
+        Func<string, Task> onContentDelta,
+        Func<string, Task> onReasoningDelta,
+        CancellationToken ct)
+    {
+        var bot = await ResolveBotAsync(botId, userId);
+        await EnsureUsableAsync(bot);
+
+        var conversation = await _db.Conversations
+            .FirstOrDefaultAsync(c => c.BotId == botId && c.UserId == userId)
+            ?? throw new KeyNotFoundException($"No conversation with bot {botId} yet.");
+
+        var last = await _db.Messages
+            .Where(m => m.ConversationId == conversation.Id)
+            .OrderByDescending(m => m.Id)
+            .FirstOrDefaultAsync(ct)
+            ?? throw new NothingToRetryException("The conversation is empty — nothing to retry.");
+
+        Message target;
+        if (last.Role == MessageRole.User)
+        {
+            target = last; // the turn went unanswered — retry it
+        }
+        else if (!last.IsComplete)
+        {
+            // The last reply is a partial (stopped or failed) — drop it and retry
+            // the user turn it was answering.
+            var previous = await _db.Messages
+                .Where(m => m.ConversationId == conversation.Id && m.Id < last.Id)
+                .OrderByDescending(m => m.Id)
+                .FirstOrDefaultAsync(ct)
+                ?? throw new NothingToRetryException("Nothing to retry.");
+            if (previous.Role != MessageRole.User)
+                throw new NothingToRetryException("Nothing to retry.");
+            _db.Messages.Remove(last);
+            await _db.SaveChangesAsync(ct);
+            target = previous;
+        }
+        else
+        {
+            throw new NothingToRetryException("The last turn already completed — nothing to retry.");
+        }
+
+        if (onStart is not null) await onStart(target.Id);
+
+        return await RunGenerationAsync(bot, userId, conversation, target,
+            onContentDelta, onReasoningDelta, ct);
+    }
+
+    /// <summary>
+    /// Resolve the bot for this user — owner or approved invitee (§2.5); everyone
+    /// else gets not-found, not forbidden.
+    /// </summary>
+    private async Task<Bot> ResolveBotAsync(int botId, int userId)
+    {
+        return await _db.Bots.Include(b => b.Preset)
+            .FirstOrDefaultAsync(b => b.Id == botId
+                && (b.OwnerId == userId
+                    || _db.BotAccesses.Any(a => a.BotId == b.Id && a.UserId == userId)))
+            ?? throw new KeyNotFoundException($"Bot {botId} not found for user {userId}.");
+    }
+
+    /// <summary>
+    /// Kill switch + usage quota (§12a, §2.5). Checked before any persistence or
+    /// LLM call: a suspended / quota-exceeded bot spends no key and logs no
+    /// interaction — a retry is subject to the same check.
+    /// </summary>
+    private async Task EnsureUsableAsync(Bot bot)
+    {
+        if (bot.Suspended)
+            throw new BotUnavailableException(
+                "This bot has been paused by its creator. Please try again later.")
+            {
+                Suspended = true,
+            };
+        if (bot.MaxInteractions is > 0)
+        {
+            var used = await _db.LlmInteractions.CountAsync(i => i.BotId == bot.Id);
+            if (used >= bot.MaxInteractions)
+                throw new BotUnavailableException(
+                    $"This bot has reached its usage limit ({bot.MaxInteractions} interactions). " +
+                    "Ask its creator to raise the limit in the bot settings.")
+                {
+                    QuotaExceeded = true,
+                };
+        }
+    }
+
+    /// <summary>
+    /// The generation half of a turn: provider, memory retrieval, prompt assembly,
+    /// streaming, persistence, the interaction log, and recall stats. Shared by a
+    /// fresh turn and a retry (§12b).
+    /// </summary>
+    private async Task<ChatRunResult> RunGenerationAsync(
+        Bot bot, int userId, Conversation conversation, Message userMessage,
+        Func<string, Task> onContentDelta,
+        Func<string, Task> onReasoningDelta,
+        CancellationToken ct)
+    {
+        var preset = bot.Preset;
+
+        // ── Provider ─────────────────────────────────────────────────────────────
 
         // ── Provider ─────────────────────────────────────────────────────────────
         if (!_factory.IsSupported(preset.Provider))
@@ -164,7 +260,7 @@ public sealed class ChatService
         {
             try
             {
-                var queryVectors = await provider.EmbedAsync(preset.EmbeddingModel, [content], ct);
+                var queryVectors = await provider.EmbedAsync(preset.EmbeddingModel, [userMessage.Content], ct);
                 var candidates = await _memories.SearchAsync(
                     _db, preset.EmbeddingModel, bot.Id, userId,
                     queryVectors[0], _memories.TopK * 4, ct);
@@ -234,7 +330,7 @@ public sealed class ChatService
             ? PromptAssembly.FormatReturnGap(historyRaw[^1].CreatedAt, now, _gapThreshold)
             : null;
         requestMessages.Add(new LlmChatMessage(MessageRole.User,
-            (returnGap is null ? "" : returnGap + "\n") + content));
+            (returnGap is null ? "" : returnGap + "\n") + userMessage.Content));
 
         var request = new LlmChatRequest
         {

@@ -24,17 +24,34 @@ public class ChatHub(ChatService chat) : Hub
 
     private int _userId => int.Parse(Context.User!.FindFirst("sub")!.Value);
 
+    /// <summary>One fresh turn: persist the user's message, then stream the reply.</summary>
     public Task SendAsync(int botId, string content)
     {
-        if (Active.TryRemove(Context.ConnectionId, out var previous))
-        {
-            previous.Cancel();
-            previous.Dispose();
-        }
+        var cts = Begin();
+        return Run(botId, cts, ct => chat.RunAsync(
+            botId,
+            _userId,
+            content,
+            onStart: m => Started(botId, m),
+            onContentDelta: async delta => await Clients.Caller.SendAsync("chat.delta", new { delta }),
+            onReasoningDelta: async delta => await Clients.Caller.SendAsync("chat.reasoning", new { delta }),
+            ct));
+    }
 
-        var cts = new CancellationTokenSource();
-        Active[Context.ConnectionId] = cts;
-        return Run(botId, content, cts);
+    /// <summary>
+    /// "Try again" (§12b): re-run the last turn that has no complete reply — a failed
+    /// or stopped turn is not a dead end. No new user message is appended.
+    /// </summary>
+    public Task RetryLastAsync(int botId)
+    {
+        var cts = Begin();
+        return Run(botId, cts, ct => chat.RetryLastAsync(
+            botId,
+            _userId,
+            onStart: m => Started(botId, m),
+            onContentDelta: async delta => await Clients.Caller.SendAsync("chat.delta", new { delta }),
+            onReasoningDelta: async delta => await Clients.Caller.SendAsync("chat.reasoning", new { delta }),
+            ct));
     }
 
     /// <summary>"Stop generating" (§4.2).</summary>
@@ -56,26 +73,35 @@ public class ChatHub(ChatService chat) : Hub
         return base.OnDisconnectedAsync(exception);
     }
 
-    private async Task Run(int botId, string content, CancellationTokenSource cts)
+    /// <summary>
+    /// One run at a time per connection: a new invocation cancels the previous one.
+    /// </summary>
+    private CancellationTokenSource Begin()
     {
-        int userMessageId = 0;
+        if (Active.TryRemove(Context.ConnectionId, out var previous))
+        {
+            previous.Cancel();
+            previous.Dispose();
+        }
+        var cts = new CancellationTokenSource();
+        Active[Context.ConnectionId] = cts;
+        return cts;
+    }
+
+    private Task Started(int botId, int messageId)
+    {
+        try { return Clients.Caller.SendAsync("chat.started", new { botId, messageId }); }
+        catch { return Task.CompletedTask; } // client already gone; the run continues and persists
+    }
+
+    private async Task Run(int botId, CancellationTokenSource cts,
+        Func<CancellationToken, Task<ChatService.ChatRunResult>> start)
+    {
         try
         {
             // Relay deltas as they arrive; a client disconnect throws here and the
             // service treats it as a failed/cancelled run.
-            var result = await chat.RunAsync(
-                botId,
-                _userId,
-                content,
-                onStart: async messageId =>
-                {
-                    userMessageId = messageId;
-                    try { await Clients.Caller.SendAsync("chat.started", new { botId, messageId }); }
-                    catch { /* client already gone; the run continues and persists */ }
-                },
-                onContentDelta: async delta => await Clients.Caller.SendAsync("chat.delta", new { delta }),
-                onReasoningDelta: async delta => await Clients.Caller.SendAsync("chat.reasoning", new { delta }),
-                cts.Token);
+            var result = await start(cts.Token);
 
             if (result.Failed)
             {
@@ -97,6 +123,7 @@ public class ChatHub(ChatService chat) : Hub
         }
         // A provider timeout is a TaskCanceledException without a user cancel —
         // it must reach the client as chat.failed, not as a raw invoke error.
+        // "Nothing to retry" (§12b) and a paused/quota-capped bot surface the same way.
         catch (Exception ex) when (ex is not OperationCanceledException || !cts.IsCancellationRequested)
         {
             try

@@ -356,3 +356,26 @@ public sealed record InteractionDetailDto
     public string? FailureReason { get; init; }
     public DateTime CreatedAt { get; init; }
 }
+
+// ── Durable work queue (§12b) ──────────────────────────────────────────────────
+/// <summary>
+/// A background work item in the durable queue (§12b), for the admin "background
+/// work" panel. The bot is resolved from the item's conversation.
+/// </summary>
+public sealed record WorkItemDto
+{
+    public int Id { get; init; }
+    /// <summary>Extraction | Evolution | Summary.</summary>
+    public string Kind { get; init; } = "";
+    public int ConversationId { get; init; }
+    public int BotId { get; init; }
+    public string BotName { get; init; } = "";
+    /// <summary>Pending | Running | Dead.</summary>
+    public string Status { get; init; } = "";
+    public int Attempts { get; init; }
+    public int MaxAttempts { get; init; }
+    public DateTime NextTryAt { get; init; }
+    public string? LastFailure { get; init; }
+    public DateTime CreatedAt { get; init; }
+    public DateTime UpdatedAt { get; init; }
+}

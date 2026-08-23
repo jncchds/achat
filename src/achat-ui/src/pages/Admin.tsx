@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   apiError, createUser, deleteUser, listUsers, resetUserPassword, setUserActive,
-  getStoredUser, type User,
+  listWork, retryWork, discardWork, getStoredUser, type User, type WorkItem,
 } from '../api'
 
 export default function Admin() {
@@ -10,10 +10,12 @@ export default function Admin() {
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
   const [nu, setNu] = useState({ username: '', displayName: '', password: '' })
+  const [work, setWork] = useState<WorkItem[]>([])
   const selfId = getStoredUser()?.id ?? null
 
   const load = useCallback(() => {
     listUsers().then(setUsers).catch(e => setError(apiError(e)))
+    listWork().then(setWork).catch(() => { /* work list is best-effort on this page */ })
   }, [])
   useEffect(() => { load() }, [load])
 
@@ -163,6 +165,78 @@ export default function Admin() {
         logged interactions is blocked; disable them instead. The bootstrap admin is created from
         <span className="mono"> BootstrapAdmin</span> settings on first run (§7.2).
       </p>
+
+      <h3 style={{ marginTop: '2rem', marginBottom: '0.75rem' }}>Background work</h3>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Memory extraction, personality evolution, and summarisation run off the request path as
+        durable background work (§12b). A failed pass retries with backoff; after the attempt cap
+        it dead-letters here instead of hammering the provider. Retry re-arms an item, discard
+        removes it (the worker may re-arm it if its trigger still holds).
+      </p>
+      {work.length === 0
+        ? <p className="hint">No background work in flight or waiting — the queue is clear.</p>
+        : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Kind</th>
+                  <th>Bot</th>
+                  <th>Status</th>
+                  <th>Attempts</th>
+                  <th>Next try</th>
+                  <th>Last failure</th>
+                  <th aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {work.map(w => (
+                  <tr key={w.id}>
+                    <td className="mono">{w.kind}</td>
+                    <td>{w.botName}</td>
+                    <td>
+                      {w.status === 'Dead' && <span className="pill danger">dead</span>}
+                      {w.status === 'Running' && <span className="pill">running</span>}
+                      {w.status === 'Pending' && <span className="pill neutral">pending</span>}
+                    </td>
+                    <td>{w.attempts}/{w.maxAttempts}</td>
+                    <td>{new Date(w.nextTryAt).toLocaleString()}</td>
+                    <td className="mono" style={{ maxWidth: '26rem', overflowWrap: 'anywhere' }}>
+                      {w.lastFailure ?? '—'}
+                    </td>
+                    <td>
+                      <div className="row" style={{ justifyContent: 'flex-end', gap: '0.25rem' }}>
+                        <button
+                          className="btn-ghost"
+                          disabled={w.status === 'Running'}
+                          onClick={async () => {
+                            try { await retryWork(w.id); load() }
+                            catch (err) { setError(apiError(err)) }
+                          }}
+                          title="Reset attempts and run as soon as possible"
+                        >
+                          Retry
+                        </button>
+                        <button
+                          className="btn-danger"
+                          disabled={w.status === 'Running'}
+                          onClick={async () => {
+                            if (!window.confirm('Discard this work item? The worker may re-arm it if its trigger still holds.')) return
+                            try { await discardWork(w.id); load() }
+                            catch (err) { setError(apiError(err)) }
+                          }}
+                          title="Remove from the queue"
+                        >
+                          Discard
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
     </div>
   )
 }

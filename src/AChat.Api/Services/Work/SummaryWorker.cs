@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using AChat.Core;
 using AChat.Core.Interfaces;
 using AChat.Core.Models;
@@ -8,62 +7,28 @@ using Microsoft.EntityFrameworkCore;
 namespace AChat.Api.Services;
 
 /// <summary>
-/// The rolling-summary worker (§5.3, §5.5). A background service — not in the request
-/// path, a turn never waits on it. It rewrites the conversation's single
-/// <see cref="ConversationSummary"/> row in place when the un-summarised tail exceeds
-/// the configured token threshold: previous summary + newly aged-out messages →
-/// rewritten summary.
-///
-/// Uses the preset's utility model when set (else the generation model, §3), and logs
-/// every call — success or failure — to the interaction log (§4.4, purpose
-/// <see cref="InteractionPurpose.Summarisation"/>). A failed pass leaves the watermark
-/// untouched, so the same tail is retried on a later sweep.
+/// Arms summarisation work (§12b): a conversation's un-summarised tail (messages
+/// after <see cref="ConversationSummary.CoversUpToMessageId"/>) exceeds
+/// <c>Chat:SummaryTailTokens</c> — the same threshold the handler re-validates,
+/// so the queue never arms a pass that is not yet due (which would no-op and
+/// re-arm in a loop). No LLM work happens here.
 /// </summary>
-public sealed class SummaryService : BackgroundService
+public sealed class SummaryProducer : IWorkProducer
 {
-    private readonly IServiceScopeFactory _scopes;
     private readonly IConfiguration _config;
-    private readonly ILogger<SummaryService> _log;
-    private readonly ConcurrentDictionary<int, byte> _inFlight = new();
+    public WorkKind Kind => WorkKind.Summary;
+    public int MaxAttempts { get; }
 
-    private static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(15);
-
-    public SummaryService(IServiceScopeFactory scopes, IConfiguration config, ILogger<SummaryService> log)
+    public SummaryProducer(IConfiguration config)
     {
-        _scopes = scopes;
         _config = config;
-        _log = log;
+        MaxAttempts = config.GetValue("Work:MaxAttempts", 5);
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    public async Task ProduceAsync(AppDbContext db, CancellationToken ct)
     {
-        _log.LogInformation("Summary service started (sweep every {Interval}s, tail threshold {Threshold} tokens)",
-            SweepInterval.TotalSeconds, _config.GetValue("Chat:SummaryTailTokens", 800));
-        try
-        {
-            using var timer = new PeriodicTimer(SweepInterval);
-            while (await timer.WaitForNextTickAsync(stoppingToken))
-            {
-                try { await SweepAsync(stoppingToken); }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
-                catch (Exception ex)
-                {
-                    // The sweep is best-effort; a failed sweep retries on the next tick.
-                    _log.LogWarning(ex, "Summary sweep failed");
-                }
-            }
-        }
-        catch (OperationCanceledException) { /* shutting down */ }
-    }
+        var threshold = _config.GetValue("Chat:SummaryTailTokens", 800);
 
-    private async Task SweepAsync(CancellationToken ct)
-    {
-        using var scope = _scopes.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var keys = scope.ServiceProvider.GetRequiredService<IApiKeyProtector>();
-        var factory = scope.ServiceProvider.GetRequiredService<ILlmProviderFactory>();
-
-        // Conversations with enough un-summarised tail to be worth a pass.
         var conversations = await db.Conversations
             .AsNoTracking()
             .Where(c => db.Messages.Count(m => m.ConversationId == c.Id) >= 2)
@@ -77,65 +42,118 @@ public sealed class SummaryService : BackgroundService
         foreach (var conv in conversations)
         {
             var watermark = summaries.TryGetValue((conv.BotId, conv.UserId), out var upTo) ? upTo : 0;
-            var tailCount = await db.Messages.CountAsync(m => m.ConversationId == conv.Id && m.Id > watermark, ct);
-            if (tailCount < 2) continue;
+            var tail = await db.Messages
+                .AsNoTracking()
+                .Where(m => m.ConversationId == conv.Id && m.Id > watermark)
+                .Select(m => m.Content)
+                .ToListAsync(ct);
+            if (tail.Count < 2) continue;
+            if (tail.Sum(PromptAssembly.EstimateTokens) <= threshold) continue;
 
-            if (!_inFlight.TryAdd(conv.Id, 0)) continue;
-            try
-            {
-                await SummariseConversationAsync(db, keys, factory, conv.Id, ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "Summarisation failed for conversation {ConversationId}", conv.Id);
-            }
-            finally
-            {
-                _inFlight.TryRemove(conv.Id, out _);
-            }
+            // A preset that cannot generate is a configuration state, not a failure.
+            var canGenerate = await db.Bots
+                .Where(b => b.Id == conv.BotId)
+                .Select(b => b.Preset.GenerationModel != "" && b.Preset.GenerationModel != null)
+                .FirstOrDefaultAsync(ct);
+            if (!canGenerate) continue;
+
+            await WorkQueue.UpsertAsync(db, Kind, conv.Id, MaxAttempts, ct);
         }
     }
+}
 
-    private async Task SummariseConversationAsync(
-        AppDbContext db, IApiKeyProtector keys, ILlmProviderFactory factory,
-        int conversationId, CancellationToken ct)
+/// <summary>
+/// The rolling-summary pass (§5.3, §5.5 — executed by the durable queue per §12b).
+/// Rewrites the conversation's single <see cref="ConversationSummary"/> row in
+/// place: previous summary + newly aged-out messages → rewritten summary.
+///
+/// Uses the preset's utility model when set (else the generation model, §3), and
+/// logs every call — success or failure — to the interaction log (§4.4, purpose
+/// <see cref="InteractionPurpose.Summarisation"/>). The watermark
+/// (<see cref="ConversationSummary.CoversUpToMessageId"/>) advances only on
+/// success; a failed pass leaves it untouched so the same tail retries (now with
+/// backoff and a cap, §12b).
+/// </summary>
+public sealed class SummaryHandler : IWorkHandler
+{
+    private readonly IApiKeyProtector _keys;
+    private readonly ILlmProviderFactory _factory;
+    private readonly IConfiguration _config;
+    private readonly ILogger<SummaryHandler> _log;
+
+    public WorkKind Kind => WorkKind.Summary;
+
+    public SummaryHandler(
+        IApiKeyProtector keys, ILlmProviderFactory factory,
+        IConfiguration config, ILogger<SummaryHandler> log)
+    {
+        _keys = keys;
+        _factory = factory;
+        _config = config;
+        _log = log;
+    }
+
+    public async Task<WorkOutcome> ExecuteAsync(AppDbContext db, WorkItem item, CancellationToken ct)
     {
         var conversation = await db.Conversations
             .AsNoTracking()
-            .FirstOrDefaultAsync(c => c.Id == conversationId, ct);
-        if (conversation is null) return;
+            .FirstOrDefaultAsync(c => c.Id == item.ConversationId, ct);
+        if (conversation is null) return WorkOutcome.Ok; // gone — stale claim
+
+        var bot = await db.Bots.Include(b => b.Preset)
+            .FirstOrDefaultAsync(b => b.Id == conversation.BotId, ct);
+        if (bot?.Preset is null) return WorkOutcome.Ok; // the bot or its preset is gone — stale claim
+        var preset = bot.Preset;
+        if (string.IsNullOrWhiteSpace(preset.GenerationModel)) return WorkOutcome.Ok; // configuration state
+
+        // Re-validate the trigger: the tail may have shrunk (a stale claim) — then
+        // no-op succeeds instead of burning another attempt.
+        var summary = await db.ConversationSummaries
+            .FirstOrDefaultAsync(s => s.BotId == conversation.BotId && s.UserId == conversation.UserId, ct);
+        var watermark = summary?.CoversUpToMessageId ?? 0;
+        var tailContents = await db.Messages
+            .AsNoTracking()
+            .Where(m => m.ConversationId == conversation.Id && m.Id > watermark)
+            .Select(m => m.Content)
+            .ToListAsync(ct);
+        var threshold = _config.GetValue("Chat:SummaryTailTokens", 800);
+        if (tailContents.Count < 2 || tailContents.Sum(PromptAssembly.EstimateTokens) <= threshold)
+            return WorkOutcome.Ok;
+
+        return await SummariseAsync(db, conversation, ct);
+    }
+
+    private async Task<WorkOutcome> SummariseAsync(
+        AppDbContext db, Conversation conversation, CancellationToken ct)
+    {
+        var bot = await db.Bots.Include(b => b.Preset)
+            .FirstAsync(b => b.Id == conversation.BotId, ct);
+        var preset = bot.Preset!;
 
         var summary = await db.ConversationSummaries
             .FirstOrDefaultAsync(s => s.BotId == conversation.BotId && s.UserId == conversation.UserId, ct);
         var watermark = summary?.CoversUpToMessageId ?? 0;
         var tail = await db.Messages
             .AsNoTracking()
-            .Where(m => m.ConversationId == conversationId && m.Id > watermark)
+            .Where(m => m.ConversationId == conversation.Id && m.Id > watermark)
             .OrderBy(m => m.Id)
             .ToListAsync(ct);
 
-        if (tail.Count < 2) return;
+        if (tail.Count < 2) return WorkOutcome.Ok;
 
-        var tailTokens = tail.Sum(m => PromptAssembly.EstimateTokens(m.Content));
         var threshold = _config.GetValue("Chat:SummaryTailTokens", 800);
-        if (tailTokens <= threshold) return;
-
-        var bot = await db.Bots.Include(b => b.Preset)
-            .FirstOrDefaultAsync(b => b.Id == conversation.BotId, ct);
-        if (bot?.Preset is null) return;
-        var preset = bot.Preset;
-        if (string.IsNullOrWhiteSpace(preset.GenerationModel)) return;
+        if (tail.Sum(m => PromptAssembly.EstimateTokens(m.Content)) <= threshold)
+            return WorkOutcome.Ok;
 
         string? apiKey = null;
         if (preset.ApiKeyEncrypted is not null)
         {
-            try { apiKey = keys.Unprotect(Convert.ToBase64String(preset.ApiKeyEncrypted)); }
+            try { apiKey = _keys.Unprotect(Convert.ToBase64String(preset.ApiKeyEncrypted)); }
             catch { apiKey = null; }
         }
 
         var model = string.IsNullOrWhiteSpace(preset.UtilityModel) ? preset.GenerationModel : preset.UtilityModel;
-        var provider = factory.Create(new LlmPresetConfig
+        var provider = _factory.Create(new LlmPresetConfig
         {
             Provider = preset.Provider,
             Endpoint = preset.BaseEndpoint,
@@ -233,7 +251,7 @@ public sealed class SummaryService : BackgroundService
             summary.UpdatedAt = now;
             await db.SaveChangesAsync(ct);
             _log.LogInformation("Rewrote summary for conversation {ConversationId} — now covers up to message {MaxId}",
-                conversationId, summary.CoversUpToMessageId);
+                conversation.Id, summary.CoversUpToMessageId);
         }
 
         // Every call is logged, success or failure (§4.4).
@@ -257,6 +275,8 @@ public sealed class SummaryService : BackgroundService
             CreatedAt = now,
         });
         await db.SaveChangesAsync(ct);
+
+        return failed ? WorkOutcome.Fail(failure) : WorkOutcome.Ok;
     }
 
     private static string SerializeRequest(IReadOnlyList<LlmChatMessage> messages) =>

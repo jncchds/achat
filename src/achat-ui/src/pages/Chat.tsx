@@ -162,12 +162,38 @@ export default function Chat() {
     try { await connRef.current?.invoke('StopAsync') } catch { /* ignore */ }
   }, [])
 
+  // ── Try again (§12b) — re-run the last turn that has no complete reply ────────
+  const retryLast = useCallback(async () => {
+    if (busy) return
+    const conn = connRef.current
+    if (!conn) { setLoadError('Chat transport not ready.'); return }
+    if (conn.state !== 'Connected') {
+      try { await conn.start() } catch (e) { setLoadError(apiError(e)); return }
+    }
+    setBusy(true)
+    const assistantKey = `a${Date.now()}`
+    streamingKey.current = assistantKey
+    const assistantMsg: UiMsg = { key: assistantKey, role: 'Assistant', content: '', reasoning: '', complete: false, streaming: true, at: new Date().toISOString() }
+    setMsgs(prev => [...prev, assistantMsg])
+    try {
+      await conn.invoke('RetryLastAsync', id)
+    } catch (e) {
+      patchStreaming(d => ({ ...d, streaming: false, complete: false, error: (e as Error).message }))
+      setBusy(false)
+      streamingKey.current = null
+    }
+  }, [busy, id])
+
   if (loadError && !bot) {
     return <div className="chat-wrap"><p className="error-msg">{loadError}</p></div>
   }
   if (!bot) {
     return <div className="chat-wrap"><p className="hint">Loading…</p></div>
   }
+
+  // "Try again" is offered only on the last message, when it's an unfinished
+  // assistant turn — that's what a retry re-runs (§12b).
+  const lastKey = msgs.length > 0 ? msgs[msgs.length - 1].key : null
 
   return (
     <div className="chat-wrap">
@@ -203,6 +229,13 @@ export default function Chat() {
             )}
             {!m.complete && m.error && <span className="msg-error">{m.error}</span>}
             {!m.complete && !m.error && m.content !== '' && <span className="msg-partial">— stopped</span>}
+            {m.role === 'Assistant' && !m.complete && m.key === lastKey && !busy && (
+              <div style={{ marginTop: '0.5rem' }}>
+                <button className="btn-ghost btn-sm" onClick={retryLast} aria-label="Try again — re-run this turn">
+                  ↻ Try again
+                </button>
+              </div>
+            )}
           </div>
         ))}
       </div>

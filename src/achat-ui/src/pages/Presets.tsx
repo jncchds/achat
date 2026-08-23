@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import ModelInput from '../components/ModelInput'
 import {
   apiError, createPreset, deletePreset, listBots, listPresets, loadModels, testPreset,
   updatePreset, type ModelInfo, type Preset, type PresetInput, type Provider,
@@ -37,6 +38,9 @@ function PresetForm({ initial, onSaved, onCancel }: {
   const [lockedBots, setLockedBots] = useState<string[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  // The loaded catalogue feeds the suggestions in all three model fields.
+  const modelIds = models.map(m => m.id)
 
   // §5.7 — which bots lock the embedding model.
   const refreshLock = useCallback((presetId?: number) => {
@@ -79,6 +83,10 @@ function PresetForm({ initial, onSaved, onCancel }: {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!genModel.trim()) {
+      setError('A generation model is required. Load the model list or type a model id.')
+      return
+    }
     setBusy(true)
     setError('')
     const payload: PresetInput = {
@@ -123,25 +131,32 @@ function PresetForm({ initial, onSaved, onCancel }: {
           API key {initial?.hasApiKey && <span className="hint">(current: {initial.maskedApiKey} — blank leaves it unchanged)</span>}
           <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={initial?.hasApiKey ? '••• unchanged •••' : 'sk-…'} autoComplete="off" />
         </label>
-        <label>Generation model <span className="hint">(the bot's voice)</span>
-          <div style={{ display: 'flex', gap: '0.4rem' }}>
-            <input value={genModel} onChange={e => setGenModel(e.target.value)} required style={{ flex: 1 }} />
-            <button type="button" className="btn-ghost" onClick={doLoadModels} disabled={modelsBusy}>{modelsBusy ? '…' : 'Load models'}</button>
+        <label>
+          Model list <span className="hint">(suggestions for the three model fields below — any model id can still be typed)</span>
+          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <button type="button" className="btn-ghost" onClick={doLoadModels} disabled={modelsBusy}>
+              {modelsBusy ? 'Loading…' : models.length > 0 ? `Reload (${models.length} loaded)` : 'Load models'}
+            </button>
+            {models.length > 0 && <span className="hint">{models.length} models from the endpoint above</span>}
           </div>
-          {models.length > 0 && (
-            <select value={genModel} onChange={e => setGenModel(e.target.value)} style={{ marginTop: '0.3rem' }}>
-              {models.map(m => <option key={m.id} value={m.id}>{m.id}</option>)}
-            </select>
-          )}
           {modelsError && <span className="hint" style={{ color: 'var(--danger)', display: 'block' }}>{modelsError}</span>}
         </label>
+        <label>Generation model <span className="hint">(the bot's voice)</span>
+          <ModelInput
+            value={genModel} onChange={setGenModel} suggestions={modelIds}
+            placeholder="e.g. qwen/qwen3.8-27b" ariaLabel="Generation model" />
+        </label>
         <label>Utility model <span className="hint">(background chores; blank = generation model)</span>
-          <input value={utilModel} onChange={e => setUtilModel(e.target.value)} placeholder={genModel || 'defaults to generation model'} />
+          <ModelInput
+            value={utilModel} onChange={setUtilModel} suggestions={modelIds}
+            placeholder={genModel || 'defaults to generation model'} ariaLabel="Utility model" />
         </label>
         <label>
           Embedding model {lockedBots.length > 0 && <span className="pill danger" style={{ marginLeft: '0.4rem' }}>locked</span>}
-          <input value={embedModel} onChange={e => setEmbedModel(e.target.value)} disabled={lockedBots.length > 0}
-            placeholder="e.g. nomic-embed-text" />
+          <ModelInput
+            value={embedModel} onChange={setEmbedModel} suggestions={modelIds}
+            disabled={lockedBots.length > 0}
+            placeholder="e.g. nomic-embed-text" ariaLabel="Embedding model" />
           {lockedBots.length > 0 && <span className="hint">Used by: {lockedBots.join(', ')} — detach or delete those bots to change it (§5.7).</span>}
         </label>
         <label>Temperature <span className="hint">(0–2, blank = provider default)</span>

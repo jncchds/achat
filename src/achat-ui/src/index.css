@@ -1082,3 +1082,50 @@ select:focus-visible,
 @media (pointer: coarse) {
   button, a { min-height: 1.4rem; }
 }
+
+/* ── Model suggestion input (§3, "Load models") ─────────────────────────────
+   The field stays freeform; the dropdown is a capped substring filter of the
+   loaded catalogue. */
+.model-input {
+  position: relative;
+  width: 100%;
+}
+.model-suggest {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  margin: 0.15rem 0 0;
+  padding: 0.2rem;
+  list-style: none;
+  max-height: 15rem;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+.model-suggest-item {
+  padding: 0.35rem 0.55rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+}
+.model-suggest-item.active {
+  background: var(--accent-faint);
+  color: var(--accent);
+}
+.model-suggest-item.current {
+  font-weight: 600;
+}
+.model-suggest-more {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}

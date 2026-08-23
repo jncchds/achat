@@ -9,9 +9,29 @@ public sealed class OpenAICompatibleProviderStrategy : ILlmProviderStrategy
     public ILlmProvider Create(LlmPresetConfig config) => new OpenAICompatibleProvider(config);
 }
 
+public sealed class OpenAIProviderStrategy : ILlmProviderStrategy
+{
+    public LlmProvider Provider => LlmProvider.OpenAI;
+    public ILlmProvider Create(LlmPresetConfig config) => new OpenAIProvider(config);
+}
+
+public sealed class OllamaProviderStrategy : ILlmProviderStrategy
+{
+    public LlmProvider Provider => LlmProvider.Ollama;
+    public ILlmProvider Create(LlmPresetConfig config) => new OllamaProvider(config);
+}
+
+public sealed class GoogleAIStudioProviderStrategy : ILlmProviderStrategy
+{
+    public LlmProvider Provider => LlmProvider.GoogleAIStudio;
+    public ILlmProvider Create(LlmPresetConfig config) => new GoogleAIStudioProvider(config);
+}
+
 /// <summary>
-/// Maps provider family → strategy (§4.1). v1 registers OpenAICompatible only; the
-/// other families arrive in Phase 7 of the delivery plan (§12a).
+/// Maps provider family → strategy (§4.1). All four families in the
+/// <see cref="LlmProvider"/> enum are registered: each is an OpenAI-shaped endpoint,
+/// so they share the <see cref="OpenAiShapedProvider"/> implementation and differ only
+/// in their default base URL and whether a key is expected.
 /// </summary>
 public sealed class LlmProviderFactory : ILlmProviderFactory
 {
@@ -19,6 +39,9 @@ public sealed class LlmProviderFactory : ILlmProviderFactory
         new ILlmProviderStrategy[]
         {
             new OpenAICompatibleProviderStrategy(),
+            new OpenAIProviderStrategy(),
+            new OllamaProviderStrategy(),
+            new GoogleAIStudioProviderStrategy(),
         }.ToDictionary(s => s.Provider);
 
     public bool IsSupported(LlmProvider provider) => Strategies.ContainsKey(provider);
@@ -26,7 +49,5 @@ public sealed class LlmProviderFactory : ILlmProviderFactory
     public ILlmProvider Create(LlmPresetConfig config) =>
         Strategies.TryGetValue(config.Provider, out var strategy)
             ? strategy.Create(config)
-            : throw new NotSupportedException(
-                $"Provider '{config.Provider}' is not available in this build yet. v1 ships OpenAICompatible; " +
-                "other providers land in Phase 7 (see docs/design.md §12a).");
+            : throw new NotSupportedException($"Provider '{config.Provider}' has no registered strategy.");
 }

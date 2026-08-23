@@ -175,7 +175,7 @@ public class PresetsController : ControllerBase
     private Core.Interfaces.ILlmProvider CreateDraftProvider(PresetTestRequest req)
     {
         if (!_factory.IsSupported(req.Provider))
-            throw new NotSupportedException($"Provider '{req.Provider}' is not available in this build yet.");
+            throw new NotSupportedException($"Provider '{req.Provider}' has no registered strategy in this build.");
 
         // If the key was left blank on an existing preset, fall back to the stored one.
         string? apiKey = req.ApiKey;

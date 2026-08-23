@@ -44,11 +44,12 @@ src/achat-ui/             React 19 + TypeScript + Vite SPA (plain CSS, Grove pal
 
 - E2E scripts live in `scripts/e2e/` (see the README *E2E scripts* section):
   `smoke.mjs` (Playwright, headless), `sigtest.mjs` (SignalR client), per-phase
-  scripts (`phase3/4/5.mjs`), `phase5-mock.mjs` (offline pipeline check), and
-  `mockllm.mjs` (OpenAI-compatible mock with a request log). Run against the
-  containerized app at `http://localhost:5001` (admin/admin bootstrap); the phase
-  scripts point at a throwaway `achat-e2e` instance on `5002` with fast worker
-  triggers.
+  scripts (`phase3`–`phase6.mjs`, `phase7-verify.mjs`), `phase5-mock.mjs` (offline
+  pipeline check), and `mockllm.mjs` (OpenAI-compatible mock with a request log).
+  Run against the containerized app at `http://localhost:5001` (admin/admin
+  bootstrap); the phase scripts point at a throwaway `achat-e2e` instance on `5002`
+  with fast worker triggers. `phase7-verify.mjs` exercises the new providers
+  (OpenAI/Ollama/GoogleAIStudio) against the live local endpoint.
 - LLM endpoints: a local one at `http://192.168.2.33:1234/v1` (chat
   `qwen/qwen3.8-27b`, a reasoning model; embeddings
   `text-embedding-nomic-embed-text-v1.5`, 768-dim) — the **"Qwen local"** preset —

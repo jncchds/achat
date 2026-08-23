@@ -1,6 +1,6 @@
 namespace AChat.Core.Models;
 
-/// <summary>Provider families. All four are strategy classes; v1 ships OpenAICompatible only.</summary>
+/// <summary>Provider families. All four are OpenAI-shaped and registered as strategies.</summary>
 public enum LlmProvider
 {
     Ollama,

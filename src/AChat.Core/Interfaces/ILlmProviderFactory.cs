@@ -34,6 +34,6 @@ public interface ILlmProviderFactory
 {
     ILlmProvider Create(LlmPresetConfig config);
 
-    /// <summary>Whether a strategy is registered for this family (v1: OpenAICompatible only).</summary>
+    /// <summary>Whether a strategy is registered for this family.</summary>
     bool IsSupported(LlmProvider provider);
 }

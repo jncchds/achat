@@ -6,11 +6,11 @@ import {
 } from '../api'
 
 const PROVIDERS: Provider[] = ['OpenAICompatible', 'Ollama', 'OpenAI', 'GoogleAIStudio']
-const V1_PROVIDERS = new Set<Provider>(['OpenAICompatible'])
 
+// Blank endpoint → the provider's default (shown as a placeholder hint).
 const DEFAULT_ENDPOINTS: Record<Provider, string> = {
-  OpenAICompatible: '',
-  Ollama: 'http://host.docker.internal:11434',
+  OpenAICompatible: 'https://api.openai.com/v1',
+  Ollama: 'http://host.docker.internal:11434/v1',
   OpenAI: 'https://api.openai.com/v1',
   GoogleAIStudio: 'https://generativelanguage.googleapis.com/v1beta/openai',
 }
@@ -112,9 +112,7 @@ function PresetForm({ initial, onSaved, onCancel }: {
         <label>Provider
           <select value={provider} onChange={e => setProvider(e.target.value as Provider)}>
             {PROVIDERS.map(p => (
-              <option key={p} value={p} disabled={!V1_PROVIDERS.has(p)}>
-                {p}{V1_PROVIDERS.has(p) ? '' : ' — arrives in Phase 7'}
-              </option>
+              <option key={p} value={p}>{p}</option>
             ))}
           </select>
         </label>

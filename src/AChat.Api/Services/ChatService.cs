@@ -103,7 +103,7 @@ public sealed class ChatService
         // ── Provider ─────────────────────────────────────────────────────────────
         if (!_factory.IsSupported(preset.Provider))
             throw new NotSupportedException(
-                $"Provider '{preset.Provider}' is not available in this build yet (v1: OpenAICompatible).");
+                $"Provider '{preset.Provider}' has no registered strategy in this build.");
 
         string? apiKey = null;
         if (preset.ApiKeyEncrypted is not null)

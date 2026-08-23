@@ -7,31 +7,47 @@ using AChat.Core.Models;
 namespace AChat.Infrastructure.Llm;
 
 /// <summary>
-/// The v1 provider: any OpenAI-compatible /v1 endpoint (llama.cpp, vLLM, LM Studio,
-/// OpenRouter, …). Plain HTTP + System.Text.Json — no SDK dependency (§4.1).
+/// Shared implementation for every OpenAI-shaped endpoint (§4.1): plain HTTP +
+/// System.Text.Json, no SDK dependency. The four provider families differ only in
+/// their default base URL (and whether a key is expected — a blank key simply omits
+/// the Authorization header):
+///
+///   OpenAICompatible → https://api.openai.com/v1            (any /v1 endpoint)
+///   OpenAI           → https://api.openai.com/v1
+///   Ollama           → http://host.docker.internal:11434/v1 (Ollama's OpenAI API, no key)
+///   GoogleAIStudio   → https://generativelanguage.googleapis.com/v1beta/openai (Google's OpenAI API)
+///
+/// A configured <c>Endpoint</c> always wins over the default, so a user can point any
+/// of these families at a custom gateway.
 /// </summary>
-public sealed class OpenAICompatibleProvider(LlmPresetConfig config) : ILlmProvider
+public abstract class OpenAiShapedProvider(LlmPresetConfig config) : ILlmProvider
 {
-    public LlmProvider Provider => LlmProvider.OpenAICompatible;
+    protected LlmPresetConfig Config { get; } = config;
+
+    /// <summary>Which provider family this instance reports.</summary>
+    public abstract LlmProvider Provider { get; }
+
+    /// <summary>Used when the preset's endpoint is blank.</summary>
+    protected virtual string DefaultBaseUrl => "https://api.openai.com/v1";
 
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
     };
 
-    private Uri BaseUrl => new(string.IsNullOrWhiteSpace(config.Endpoint)
-        ? "https://api.openai.com/v1"
-        : config.Endpoint.TrimEnd('/'));
+    private Uri BaseUrl => new(string.IsNullOrWhiteSpace(Config.Endpoint)
+        ? DefaultBaseUrl
+        : Config.Endpoint.TrimEnd('/'));
 
     private HttpClient Http => new()
     {
-        Timeout = TimeSpan.FromMilliseconds(config.TimeoutMs > 0 ? config.TimeoutMs : 120_000),
+        Timeout = TimeSpan.FromMilliseconds(Config.TimeoutMs > 0 ? Config.TimeoutMs : 120_000),
     };
 
     private void ApplyAuth(HttpRequestMessage req)
     {
-        if (!string.IsNullOrWhiteSpace(config.ApiKey))
-            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", config.ApiKey);
+        if (!string.IsNullOrWhiteSpace(Config.ApiKey))
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Config.ApiKey);
     }
 
     // ── Non-streaming chat ──────────────────────────────────────────────────────
@@ -97,8 +113,7 @@ public sealed class OpenAICompatibleProvider(LlmPresetConfig config) : ILlmProvi
             var root = doc.RootElement;
 
             if (root.TryGetProperty("error", out var err))
-                throw new LlmProviderException("Provider error in stream", null,
-                    err.GetRawText());
+                throw new LlmProviderException("Provider error in stream", null, err.GetRawText());
 
             string? content = null, reasoning = null, finish = null;
             int? p = null, c = null, t = null;
@@ -215,6 +230,38 @@ public sealed class OpenAICompatibleProvider(LlmPresetConfig config) : ILlmProvi
         root.TryGetProperty("usage", out var usage) && usage.TryGetProperty(field, out var v) && v.ValueKind == JsonValueKind.Number
             ? v.GetInt32()
             : null;
+}
+
+/// <summary>Any OpenAI-compatible /v1 endpoint (llama.cpp, vLLM, LM Studio, OpenRouter, …).</summary>
+public sealed class OpenAICompatibleProvider(LlmPresetConfig config) : OpenAiShapedProvider(config)
+{
+    public override LlmProvider Provider => LlmProvider.OpenAICompatible;
+}
+
+/// <summary>OpenAI's hosted API — the canonical OpenAI-compatible endpoint.</summary>
+public sealed class OpenAIProvider(LlmPresetConfig config) : OpenAiShapedProvider(config)
+{
+    public override LlmProvider Provider => LlmProvider.OpenAI;
+}
+
+/// <summary>
+/// Local Ollama, via its OpenAI-compatible API (<c>{endpoint}/v1</c>). No API key.
+/// The default endpoint reaches the Docker host, where Ollama typically runs.
+/// </summary>
+public sealed class OllamaProvider(LlmPresetConfig config) : OpenAiShapedProvider(config)
+{
+    public override LlmProvider Provider => LlmProvider.Ollama;
+    protected override string DefaultBaseUrl => "http://host.docker.internal:11434/v1";
+}
+
+/// <summary>
+/// Google AI Studio (Gemini), via its OpenAI-compatible endpoint
+/// (<c>https://generativelanguage.googleapis.com/v1beta/openai</c>). Requires a key.
+/// </summary>
+public sealed class GoogleAIStudioProvider(LlmPresetConfig config) : OpenAiShapedProvider(config)
+{
+    public override LlmProvider Provider => LlmProvider.GoogleAIStudio;
+    protected override string DefaultBaseUrl => "https://generativelanguage.googleapis.com/v1beta/openai";
 }
 
 internal static class JsonElementExtensions

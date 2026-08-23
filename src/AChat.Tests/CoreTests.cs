@@ -379,18 +379,57 @@ public class OpenAICompatibleProviderTests
         Assert.Equal(LlmProvider.OpenAICompatible, provider.Provider);
     }
 
-    [Fact]
-    public void Factory_rejects_unsupported_family_with_clear_message()
+    [Theory]
+    [InlineData(LlmProvider.OpenAICompatible, typeof(OpenAICompatibleProvider))]
+    [InlineData(LlmProvider.OpenAI, typeof(OpenAIProvider))]
+    [InlineData(LlmProvider.Ollama, typeof(OllamaProvider))]
+    [InlineData(LlmProvider.GoogleAIStudio, typeof(GoogleAIStudioProvider))]
+    public void Factory_supports_and_creates_every_provider_family(LlmProvider family, Type expectedType)
     {
         var factory = new LlmProviderFactory();
-        Assert.False(factory.IsSupported(LlmProvider.Ollama));
-        var ex = Assert.Throws<NotSupportedException>(() => factory.Create(new LlmPresetConfig
+        Assert.True(factory.IsSupported(family), $"{family} should be supported");
+        var provider = factory.Create(new LlmPresetConfig
+        {
+            Provider = family,
+            Endpoint = "http://localhost:9999/v1",
+            GenerationModel = "test-model",
+        });
+        Assert.Equal(expectedType, provider.GetType());
+        Assert.Equal(family, provider.Provider);
+    }
+
+    [Fact]
+    public void Every_enum_family_is_registered()
+    {
+        var factory = new LlmProviderFactory();
+        foreach (var family in Enum.GetValues<LlmProvider>())
+            Assert.True(factory.IsSupported(family), $"{family} should have a registered strategy");
+    }
+
+    [Fact]
+    public void Ollama_defaults_to_host_docker_openai_endpoint_and_needs_no_key()
+    {
+        // A blank endpoint must resolve to Ollama's OpenAI-compatible API on the host.
+        var p = new OllamaProvider(new LlmPresetConfig
         {
             Provider = LlmProvider.Ollama,
-            Endpoint = "http://localhost",
-            GenerationModel = "x",
-        }));
-        Assert.Contains("Phase 7", ex.Message);
+            Endpoint = "",
+            GenerationModel = "llama3",
+        });
+        // The provider is OpenAI-shaped: it issues /chat/completions against its base URL.
+        Assert.Equal(LlmProvider.Ollama, p.Provider);
+    }
+
+    [Fact]
+    public void GoogleAIStudio_defaults_to_openai_compatible_endpoint()
+    {
+        var p = new GoogleAIStudioProvider(new LlmPresetConfig
+        {
+            Provider = LlmProvider.GoogleAIStudio,
+            Endpoint = "",
+            GenerationModel = "gemini-2.0-flash",
+        });
+        Assert.Equal(LlmProvider.GoogleAIStudio, p.Provider);
     }
 }
 

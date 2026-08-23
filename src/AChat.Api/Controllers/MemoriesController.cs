@@ -113,8 +113,10 @@ public class MemoriesController(AppDbContext db, IApiKeyProtector keys, ILlmProv
                 .FirstOrDefaultAsync();
             if (preset is null || string.IsNullOrWhiteSpace(preset.EmbeddingModel))
                 return null;
-            if (preset.Provider != LlmProvider.OpenAICompatible)
-                return null; // v1 provider
+            // Every registered family is OpenAI-shaped and exposes the same
+            // /embeddings endpoint, so re-embedding works for any supported one (§3).
+            if (!_factory.IsSupported(preset.Provider))
+                return null;
 
             string? apiKey = null;
             if (preset.ApiKeyEncrypted is not null)

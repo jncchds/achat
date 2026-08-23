@@ -19,7 +19,8 @@ docker compose up -d --build
 - PostgreSQL 16 + pgvector runs as a sibling container; schema is created by
   migrations automatically on app start.
 
-Point a **preset** at any OpenAI-compatible endpoint (v1 provider), create a **bot**
+Point a **preset** at a model endpoint — local Ollama, OpenAI, Google AI Studio, or any
+OpenAI-compatible gateway (llama.cpp, vLLM, LM Studio, OpenRouter, …) — create a **bot**
 (name + who they are), and talk.
 
 ## Configuration
@@ -165,4 +166,9 @@ src/
   retained), code regeneration, admin creates users — verified: a second user requests
   access, is approved, holds a conversation, and the first user cannot see the second
   user's messages or memories
-- Phases 7–8: see the delivery plan in `docs/design.md` §12a
+- **Phase 7 — Remaining providers** ✅ Ollama, OpenAI, and Google AI Studio added
+  alongside OpenAICompatible. All four are OpenAI-shaped and share one implementation
+  (plain HTTP + System.Text.Json, no SDKs), differing only in default base URL and key
+  handling (Ollama is keyless) — verified: each new provider lists models and a bot
+  chats end-to-end against a live OpenAI-compatible endpoint
+- **Phase 8 — Operational maturity**: see the delivery plan in `docs/design.md` §12a

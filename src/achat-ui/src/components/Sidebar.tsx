@@ -27,20 +27,30 @@ export default function Sidebar({ children, bottomChildren }: SidebarProps) {
   return (
     <aside className={`app-sidebar ${collapsed ? 'collapsed' : 'expanded'}`}>
       <div className="sidebar-fixed-top">
-        <button
-          className="sidebar-btn sidebar-toggle-btn"
-          onClick={toggle}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          <span className="s-icon">☰</span>
+        <div className="sidebar-top-row">
+          <button
+            className="sidebar-btn sidebar-toggle-btn"
+            onClick={toggle}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            <span className="s-icon">☰</span>
+            {!collapsed && <span className="s-label">AChat</span>}
+          </button>
           {!collapsed && (
             <>
-              <span className="s-label">AChat</span>
-              <span className="version-pill" title="version">v{__APP_VERSION__}</span>
+              <a
+                className="version-pill"
+                href="https://github.com/jncchds/achat"
+                target="_blank"
+                rel="noreferrer"
+                title="AChat on GitHub"
+              >
+                v{__APP_VERSION__}
+              </a>
               <span className="beta-badge">ALPHA</span>
             </>
           )}
-        </button>
+        </div>
       </div>
 
       <div className="sidebar-scroll">

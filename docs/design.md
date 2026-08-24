@@ -330,14 +330,21 @@ configuration, and a typed `LlmProviderException` carrying HTTP status + error p
 - **Event schema**: `chat.started {botId, messageId}` (sent as soon as the user's turn is
   persisted, before streaming begins), `chat.delta {delta}`, `chat.reasoning {delta}`,
   `chat.completed {assistantMessageId, content, complete, promptTokens, completionTokens,
-  totalTokens}`, `chat.failed {message}`. Hub methods: `SendAsync(botId, content)`,
-  `StopAsync()`.
-- **Generation is tied to the connection** (v1 has no proactive messaging, so the
-  continue-server-side variant is not needed). A mid-generation disconnect cancels the run.
-- **Cancellation semantics**: Stop (or a disconnect before the model finished) cancels the
-  stream; the partial is persisted as an assistant message with `IsComplete = false`, and
-  the interaction is logged as cancelled ("Stopped by the user."). If the model had already
-  finished and only the tail was cut off, the call is counted as **completed**, not stopped.
+  totalTokens, recalledMemoryIds}`, `chat.stopped {}`, `chat.failed {message}`.
+  Hub methods: `SendAsync(botId, content)`, `RetryLastAsync(botId)`, `StopAsync(botId)`,
+  `ReattachAsync(botId)`.
+- **Generation outlives the browser.** A run executes detached from the page that started
+  it (background task in its own DI scope). A mid-generation disconnect — navigation, tab
+  close, network drop — drops only the relay: the run continues, and the finished reply is
+  in the timeline when you come back. A returning or reconnecting client can adopt an
+  in-flight run (`ReattachAsync`) and receive the tail. Relay callbacks are best-effort:
+  a dead watcher never fails or cancels the run.
+- **One run per (bot, user).** A second send while a run is in flight is refused, so two
+  tabs cannot double-spend the key.
+- **Stop is explicit.** `StopAsync` cancels the in-flight call; the partial is persisted
+  as an assistant message with `IsComplete = false`, and the interaction is logged as
+  cancelled ("Stopped by the user."). If the model had already finished and only the tail
+  was cut off, the call is counted as **completed**, not stopped.
 
 ### 4.3 Reasoning models `[DECIDED — v1]`
 

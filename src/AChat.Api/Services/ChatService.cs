@@ -96,7 +96,7 @@ public sealed class ChatService
         await _db.SaveChangesAsync();
 
         // The user's turn is on the record — the client can now show the run as started.
-        if (onStart is not null) await onStart(userMessage.Id);
+        if (onStart is not null) await SafeRelay(() => onStart(userMessage.Id));
 
         return await RunGenerationAsync(bot, userId, conversation, userMessage,
             onContentDelta, reasoning, ct);
@@ -165,10 +165,28 @@ public sealed class ChatService
             throw new NothingToRetryException("The last turn already completed — nothing to retry.");
         }
 
-        if (onStart is not null) await onStart(target.Id);
+        if (onStart is not null) await SafeRelay(() => onStart(target.Id));
 
         return await RunGenerationAsync(bot, userId, conversation, target,
             onContentDelta, reasoning, ct);
+    }
+
+    /// <summary>
+    /// Relay callbacks are best-effort (§4.2): the run outlives its transport. A dead
+    /// browser (navigated away, network drop) must not kill the generation — the reply
+    /// is persisted no matter what, and the client can re-attach or simply find it in
+    /// the timeline when it comes back. Only explicit Stop cancels.
+    /// </summary>
+    private async Task SafeRelay(Func<Task> relay)
+    {
+        try
+        {
+            await relay();
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug("Relay callback failed ({Message}) — the run continues", ex.Message);
+        }
     }
 
     /// <summary>
@@ -363,12 +381,12 @@ public sealed class ChatService
                 if (chunk.Content is not null)
                 {
                     contentBuilder.Append(chunk.Content);
-                    await onContentDelta(chunk.Content);
+                    await SafeRelay(() => onContentDelta(chunk.Content));
                 }
                 if (chunk.Reasoning is not null)
                 {
                     reasoningBuilder.Append(chunk.Reasoning);
-                    await onReasoningDelta(chunk.Reasoning);
+                    await SafeRelay(() => onReasoningDelta(chunk.Reasoning));
                 }
                 if (chunk.FinishReason is not null) finishReason = chunk.FinishReason;
                 if (chunk.PromptTokens is not null) promptTokens = chunk.PromptTokens;

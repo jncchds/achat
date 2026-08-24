@@ -44,20 +44,24 @@ export default function Chat() {
   const streamingKey = useRef<string | null>(null)
 
   // ── Load bot + history ───────────────────────────────────────────────────────
+  const historyReady = useRef<Promise<void> | null>(null)
   useEffect(() => {
     let live = true
-    getBot(id).then(b => {
-      if (live) setBot(b)
+    const p = (async () => {
+      const b = await getBot(id)
+      if (!live) return
+      setBot(b)
+      const ms = await getMessages(id)
+      if (!live) return
       // Greeting: if the timeline is empty and the bot has a greeting, show it.
-      return getMessages(id).then(ms => {
-        if (!live) return
-        if (ms.length === 0 && b.greeting) {
-          setMsgs([{ key: 'greeting', role: 'Assistant', content: b.greeting, reasoning: '', complete: true, at: new Date().toISOString() }])
-          return
-        }
-        setMsgs(ms.map(toUiMsg))
-      })
-    }).catch(e => { if (live) setLoadError(apiError(e)) })
+      if (ms.length === 0 && b.greeting) {
+        setMsgs([{ key: 'greeting', role: 'Assistant', content: b.greeting, reasoning: '', complete: true, at: new Date().toISOString() }])
+        return
+      }
+      setMsgs(ms.map(toUiMsg))
+    })()
+    historyReady.current = p
+    p.catch(e => { if (live) setLoadError(apiError(e)) })
     return () => { live = false }
   }, [id])
 
@@ -75,13 +79,9 @@ export default function Chat() {
     conn.on('chat.reasoning', (m: { delta: string }) => {
       patchStreaming(d => ({ ...d, reasoning: d.reasoning + m.delta }))
     })
-    conn.on('chat.completed', (m: { recalledMemoryIds?: number[] }) => {
-      const recalled = m?.recalledMemoryIds ?? []
-      patchStreaming(d => ({ ...d, streaming: false, complete: true, recalled }))
-      streamingKey.current = null
-      setBusy(false)
-      // Refresh from the server so ids / partials are canonical (keep the recalled ids
-      // — the history endpoint doesn't carry them).
+    // Refresh from the server so ids / partials are canonical (keep the recalled ids
+    // — the history endpoint doesn't carry them).
+    const refresh = () =>
       getMessages(id).then(ms => {
         const server = ms.map(toUiMsg)
         setMsgs(prev => {
@@ -91,6 +91,19 @@ export default function Chat() {
           return server.length ? server : prev
         })
       }).catch(() => {})
+
+    conn.on('chat.completed', (m: { recalledMemoryIds?: number[] }) => {
+      const recalled = m?.recalledMemoryIds ?? []
+      patchStreaming(d => ({ ...d, streaming: false, complete: true, recalled }))
+      streamingKey.current = null
+      setBusy(false)
+      refresh()
+    })
+    conn.on('chat.stopped', () => {
+      patchStreaming(d => ({ ...d, streaming: false, complete: false }))
+      streamingKey.current = null
+      setBusy(false)
+      refresh()
     })
     conn.on('chat.failed', (m: { message: string }) => {
       patchStreaming(d => ({ ...d, streaming: false, complete: false, error: m.message }))
@@ -109,7 +122,27 @@ export default function Chat() {
       }).catch(() => {})
     })
 
-    conn.start().catch(() => { /* surface on send */ })
+    // The bot may still be working when the page loads (or the transport
+    // reconnects) — generation outlives the browser (§4.2). Adopt the stream
+    // and show what has already arrived; the tail will keep flowing.
+    const reattach = async () => {
+      if (conn.state !== 'Connected') return
+      let state: { userMessageId: number | null; content: string; reasoning: string } | null
+      try { state = await conn.invoke('ReattachAsync', id) } catch { return }
+      if (!state) return
+      // Don't let the re-attach bubble be clobbered by a still-loading history.
+      if (historyReady.current) await historyReady.current.catch(() => {})
+      const key = `a${Date.now()}`
+      streamingKey.current = key
+      setBusy(true)
+      setMsgs(prev => [
+        ...prev,
+        { key, role: 'Assistant', content: state!.content, reasoning: state!.reasoning, complete: false, streaming: true, at: new Date().toISOString() },
+      ])
+    }
+    conn.onreconnected(() => { void reattach() })
+
+    conn.start().then(() => { void reattach() }).catch(() => { /* surface on send */ })
     connRef.current = conn
     return () => { conn.stop().catch(() => {}) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -159,8 +192,8 @@ export default function Chat() {
   }, [input, busy, id])
 
   const stop = useCallback(async () => {
-    try { await connRef.current?.invoke('StopAsync') } catch { /* ignore */ }
-  }, [])
+    try { await connRef.current?.invoke('StopAsync', id) } catch { /* ignore */ }
+  }, [id])
 
   // ── Try again (§12b) — re-run the last turn that has no complete reply ────────
   const retryLast = useCallback(async () => {

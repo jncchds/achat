@@ -313,10 +313,40 @@ public class WorkQueueTests
 
     private sealed class FakeFactory : ILlmProviderFactory
     {
-        private readonly FakeProvider _provider;
-        public FakeFactory(FakeProvider provider) => _provider = provider;
+        private readonly ILlmProvider _provider;
+        public FakeFactory(ILlmProvider provider) => _provider = provider;
         public bool IsSupported(LlmProvider provider) => true;
         public ILlmProvider Create(LlmPresetConfig config) => _provider;
+    }
+
+    /// <summary>Streams several slow chunks so a stop can land mid-generation.</summary>
+    private sealed class SlowProvider : ILlmProvider
+    {
+        public LlmProvider Provider => LlmProvider.OpenAICompatible;
+
+        public Task<LlmCompletion> ChatAsync(LlmChatRequest request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public async IAsyncEnumerable<LlmStreamChunk> StreamChatAsync(
+            LlmChatRequest request, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            for (var i = 1; i <= 5; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                await Task.Delay(50, ct);
+                yield return new LlmStreamChunk { Content = $"part{i} " };
+            }
+            yield return new LlmStreamChunk
+            {
+                Content = "", FinishReason = "stop", PromptTokens = 1, CompletionTokens = 5, TotalTokens = 6,
+            };
+        }
+
+        public Task<IReadOnlyList<float[]>> EmbedAsync(string model, IReadOnlyList<string> texts, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<float[]>>(new List<float[]>());
+
+        public Task<IReadOnlyList<LlmModelInfo>> ListModelsAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<LlmModelInfo>>(new List<LlmModelInfo>());
     }
 
     private sealed class ChatFixture
@@ -353,7 +383,7 @@ public class WorkQueueTests
             Db.SaveChanges();
         }
 
-        public ChatService Service()
+        public ChatService Service(ILlmProvider? provider = null)
         {
             var config = new ConfigurationBuilder().AddInMemoryCollection(
                 new Dictionary<string, string?>
@@ -367,7 +397,7 @@ public class WorkQueueTests
                     ["Chat:BudgetHistoryPercent"] = "50",
                 }).Build();
             return new ChatService(
-                Db, new FakeFactory(Provider), new FakeKeys(),
+                Db, new FakeFactory(provider ?? Provider), new FakeKeys(),
                 MemoryRetriever.FromConfiguration(config), config,
                 NullLogger<ChatService>.Instance);
         }
@@ -388,6 +418,59 @@ public class WorkQueueTests
     }
 
     private static Task Noop() => Task.CompletedTask;
+
+    // ── Detached generation (§4.2) — the run outlives its watcher ──────────────
+
+    [Fact]
+    public async Task A_dead_relay_does_not_kill_the_run()
+    {
+        var f = new ChatFixture();
+        var service = f.Service();
+
+        // A dead watcher: every relay attempt throws (navigated away, network drop).
+        Task Dead(string _) => throw new InvalidOperationException("watcher gone");
+
+        var result = await service.RunAsync(f.BotId, f.AdminId, "hi",
+            onStart: _ => Noop(), onContentDelta: Dead, onReasoningDelta: Dead, CancellationToken.None);
+
+        Assert.False(result.Failed);
+        Assert.False(result.Canceled);
+        Assert.Equal(f.Provider.Reply, result.AssistantContent);
+
+        // The full reply is persisted, complete — as if nobody had been watching (§4.2).
+        var assistant = await f.Db.Messages.LastAsync();
+        Assert.Equal(MessageRole.Assistant, assistant.Role);
+        Assert.Equal(f.Provider.Reply, assistant.Content);
+        Assert.True(assistant.IsComplete);
+    }
+
+    [Fact]
+    public async Task An_explicit_stop_cancels_mid_stream_and_persists_the_partial()
+    {
+        var f = new ChatFixture();
+        var service = f.Service(new SlowProvider());
+        var cts = new CancellationTokenSource();
+        var firstChunk = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var task = service.RunAsync(f.BotId, f.AdminId, "hi",
+            onStart: _ => Noop(),
+            onContentDelta: _ => { firstChunk.TrySetResult(); return Noop(); },
+            onReasoningDelta: _ => Noop(),
+            cts.Token);
+
+        await firstChunk.Task; // the first chunk has reached the (virtual) watcher
+        cts.Cancel();         // explicit Stop — the run must die here
+        var result = await task;
+
+        Assert.True(result.Canceled);
+        Assert.False(result.Failed);
+        Assert.Equal("part1 ", result.AssistantContent);
+
+        // The partial is on the record (§4.2) — a "Try again" can pick it up.
+        var assistant = await f.Db.Messages.LastAsync();
+        Assert.Equal(MessageRole.Assistant, assistant.Role);
+        Assert.False(assistant.IsComplete);
+    }
 
     [Fact]
     public async Task RunAsync_still_persists_user_and_assistant_turns()

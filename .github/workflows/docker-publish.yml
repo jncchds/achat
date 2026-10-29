@@ -75,9 +75,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Docker Hub's description is the README with its links pointing to GitHub and a link to the repository.
+      - name: Prepare repo description
+        run: node .github/scripts/dockerhub-readme.mjs README.md > "$RUNNER_TEMP/dockerhub-readme.md"
+
+      # Needs a Docker Hub token with the "Read, Write, Delete" scope (a "Read & Write" token can push but not edit descriptions).
       - name: Update repo description
         uses: peter-evans/dockerhub-description@v5
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+          short-description: "Self-hosted virtual friends: chat bots with a persistent personality and long-term memory"
+          readme-filepath: ${{ runner.temp }}/dockerhub-readme.md

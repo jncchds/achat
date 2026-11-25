@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
-  addDirective, apiError, approveRequest, deleteDirective, editPersona, getBot,
+  addDirective, apiError, approveRequest, deleteDirective, addTrait, editTrait, retireTrait, getBot,
   getBotShare, getBotUsage, listDirectives, listPersonaVersions, regenerateInvite,
   rejectRequest, revertPersona, revokeAccess, updateBot, updateBotSettings, updateDirective,
-  type Bot, type BotShare, type BotUsage, type Directive, type PersonaVersion,
+  type Trait, type Bot, type BotShare, type BotUsage, type Directive, type PersonaVersion,
 } from '../api'
 
 const SOURCE_LABEL: Record<string, { text: string; cls: string }> = {
   Initial: { text: 'initial', cls: 'pill' },
-  Evolution: { text: 'evolved', cls: 'pill accent' },
+  Evolution: { text: 'evolved (legacy)', cls: 'pill accent' },
+  BotTurn: { text: 'by them, in chat', cls: 'pill accent' },
+  Consolidation: { text: 'consolidated', cls: 'pill' },
   UserEdited: { text: 'edited by you', cls: 'pill accent' },
   Revert: { text: 'revert', cls: 'pill' },
 }
@@ -262,9 +264,10 @@ export default function BotSettings() {
   const [editingDirId, setEditingDirId] = useState<number | null>(null)
   const [dirText, setDirText] = useState('')
 
-  // evolved traits
-  const [editingTraits, setEditingTraits] = useState(false)
-  const [traitsText, setTraitsText] = useState('')
+  // evolved traits (a list of short items)
+  const [newTrait, setNewTrait] = useState('')
+  const [editingTraitId, setEditingTraitId] = useState<number | null>(null)
+  const [traitText, setTraitText] = useState('')
   const [viewingVersion, setViewingVersion] = useState<number | null>(null)
 
   const load = useCallback(() => {
@@ -335,9 +338,23 @@ export default function BotSettings() {
 
   // ── evolved traits ────────────────────────────────────────────────────────
   const current = versions[0] // newest first
-  const startEditTraits = () => { setEditingTraits(true); setTraitsText(current?.content ?? '') }
-  const saveTraits = () =>
-    run(() => editPersona(bot, traitsText.trim())).then(() => setEditingTraits(false))
+  const traits: Trait[] = current?.items ?? []
+  const addNewTrait = () =>
+    run(() => addTrait(bot, newTrait.trim())).then(() => setNewTrait(''))
+  const saveTrait = (t: Trait) =>
+    run(() => editTrait(bot, t.id, traitText.trim())).then(() => setEditingTraitId(null))
+  const removeTrait = (t: Trait) => {
+    if (!confirm(`Retire “${t.text}”?\n\nIt leaves the prompt but stays in the version history — a revert can bring it back.`)) return
+    return run(() => retireTrait(bot, t.id))
+  }
+  /** What a version changed relative to the one before it (versions are newest first). */
+  const diffOf = (i: number) => {
+    const v = versions[i]
+    const prev = versions[i + 1]?.items ?? []
+    const added = v.items.filter(t => !prev.some(p => p.id === t.id && t.id > 0))
+    const removed = prev.filter(p => !v.items.some(t => t.id === p.id && p.id > 0))
+    return { added, removed }
+  }
   const doRevert = (v: PersonaVersion) => {
     if (!confirm(`Revert to the version from ${new Date(v.createdAt).toLocaleString()}?\n\nA new version carrying that content is appended to the history — nothing is lost.`)) return
     return run(() => revertPersona(bot, v.id))
@@ -398,9 +415,10 @@ export default function BotSettings() {
             <span>
               <b>Evolution on</b>
               <div className="hint">
-                A background pass rewrites the evolved-traits layer when your conversation
-                has produced enough new material (slow cadence — personality that shifts
-                hourly is noise, not character). Only your conversations shape them.
+                In your own conversation the friend may add or retire a few short traits
+                about the friendship — rarely (a handful per day at most), and every change is a
+                version you can revert. When the list grows long a slow pass merges it. Only your
+                conversations shape them.
               </div>
             </span>
           </label>
@@ -481,78 +499,93 @@ export default function BotSettings() {
       <div className="card" style={{ marginBottom: '1rem' }}>
         <h3 style={{ marginTop: 0 }}>Evolved traits — how the friendship shaped them</h3>
         <p className="hint" style={{ marginTop: 0 }}>
-          Rewritten by a background pass from your conversations. You can edit this directly —
-          a human edit becomes the new baseline, and the next evolution refines it rather than
-          overwriting it.
+          Short items {botRow.name} has picked up from your friendship — added by them in your
+          conversation (rarely), or by you here. Every change is a version below; a human change
+          also pauses their own changes for a while, so a correction is never overwritten.
         </p>
 
-        {!current || current.content === '' ? (
+        {traits.length === 0 ? (
           <div className="card empty" style={{ marginBottom: '1rem' }}>
-            Nothing yet. After you and {botRow.name} have talked a while, the first evolution
-            pass will describe how the friendship has settled in.
-          </div>
-        ) : editingTraits ? (
-          <div className="memory-edit" style={{ marginBottom: '1rem' }}>
-            <textarea value={traitsText} onChange={e => setTraitsText(e.target.value)} rows={8} autoFocus />
-            <div className="row">
-              <button className="btn-primary btn-sm" disabled={busy} onClick={() => void saveTraits()}>
-                {busy ? 'Saving…' : 'Save (new version)'}
-              </button>
-              <button className="btn-ghost btn-sm" disabled={busy} onClick={() => setEditingTraits(false)}>Cancel</button>
-            </div>
+            Nothing yet. As {botRow.name} and you talk, they may note how the friendship has
+            changed them — or add something yourself below.
           </div>
         ) : (
-          <p className="memory-content" style={{ marginBottom: '1rem' }}>{current.content}</p>
-        )}
-        {current && current.content !== '' && !editingTraits && (
-          <div className="row memory-actions" style={{ marginBottom: '1.25rem' }}>
-            <button className="btn-ghost btn-sm" disabled={busy} onClick={startEditTraits}>Edit</button>
+          <div className="list" style={{ marginBottom: '1rem' }}>
+            {traits.map(t => (
+              <div key={t.id} className="card memory-card" style={{ marginBottom: '0.5rem' }}>
+                {editingTraitId === t.id ? (
+                  <div className="memory-edit">
+                    <textarea value={traitText} onChange={e => setTraitText(e.target.value)} rows={2} maxLength={200} autoFocus />
+                    <div className="row">
+                      <button className="btn-primary btn-sm" disabled={busy || !traitText.trim()} onClick={() => void saveTrait(t)}>
+                        {busy ? 'Saving…' : 'Save (new version)'}
+                      </button>
+                      <button className="btn-ghost btn-sm" disabled={busy} onClick={() => setEditingTraitId(null)}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <p className="memory-content">{t.text}</p>
+                    <div className="row memory-actions">
+                      <button className="btn-ghost btn-sm" disabled={busy}
+                        onClick={() => { setEditingTraitId(t.id); setTraitText(t.text) }}>Edit</button>
+                      <button className="btn-ghost btn-sm danger-text" disabled={busy} onClick={() => void removeTrait(t)}>Remove</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
           </div>
         )}
+
+        <div className="row" style={{ marginBottom: '1.25rem' }}>
+          <input style={{ flex: 1 }} placeholder="Add a trait — a habit, a shared joke, a way they've grown…" maxLength={200}
+            value={newTrait} onChange={e => setNewTrait(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && newTrait.trim() && !busy) void addNewTrait() }} />
+          <button className="btn-primary" disabled={busy || !newTrait.trim()} onClick={() => void addNewTrait()}>Add</button>
+        </div>
 
         {versions.length > 0 && (
           <>
             <h3 style={{ margin: '0 0 0.5rem' }}>Version history</h3>
             <div className="list">
-              {versions.map((v, i) => (
-                <div key={v.id} className={`card memory-card${i === 0 ? '' : ' faded'}`} style={{ marginBottom: '0.5rem' }}>
-                  <div className="memory-head">
-                    <span className={SOURCE_LABEL[v.source]?.cls ?? 'pill'}>{SOURCE_LABEL[v.source]?.text ?? v.source}</span>
-                    {i === 0 && <span className="pill accent">current</span>}
-                    <span className="hint" style={{ marginLeft: 'auto' }}>
-                      {new Date(v.createdAt).toLocaleString()}
-                      {v.content ? ` · ${v.content.split(/\s+/).length} words` : ' · empty'}
-                    </span>
+              {versions.map((v, i) => {
+                const d = diffOf(i)
+                return (
+                  <div key={v.id} className={`card memory-card${i === 0 ? '' : ' faded'}`} style={{ marginBottom: '0.5rem' }}>
+                    <div className="memory-head">
+                      <span className={SOURCE_LABEL[v.source]?.cls ?? 'pill'}>{SOURCE_LABEL[v.source]?.text ?? v.source}</span>
+                      {i === 0 && <span className="pill accent">current</span>}
+                      <span className="hint" style={{ marginLeft: 'auto' }}>
+                        {new Date(v.createdAt).toLocaleString()}
+                        {` · ${v.items.length} ${v.items.length === 1 ? 'trait' : 'traits'}`}
+                      </span>
+                    </div>
+                    {(d.added.length > 0 || d.removed.length > 0) && (
+                      <ul className="memory-content" style={{ margin: '0.25rem 0', paddingLeft: '1.1rem', listStyle: 'none' }}>
+                        {d.added.map(t => <li key={'a' + t.id + t.text}>+ {t.text}</li>)}
+                        {d.removed.map(t => <li key={'r' + t.id + t.text} className="hint">− {t.text}</li>)}
+                      </ul>
+                    )}
+                    {viewingVersion === v.id && (
+                      <ul className="memory-content" style={{ margin: '0.25rem 0', paddingLeft: '1.1rem' }}>
+                        {v.items.length === 0 ? <li><em className="hint">empty list</em></li>
+                          : v.items.map(t => <li key={t.id + t.text}>{t.text}</li>)}
+                      </ul>
+                    )}
+                    <div className="row memory-actions">
+                      <button className="btn-ghost btn-sm" onClick={() => setViewingVersion(viewingVersion === v.id ? null : v.id)}>
+                        {viewingVersion === v.id ? 'Close' : 'View list'}
+                      </button>
+                      {i !== 0 && (
+                        <button className="btn-ghost btn-sm danger-text" disabled={busy} onClick={() => void doRevert(v)}>
+                          Revert to this
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  {viewingVersion === v.id ? (
-                    <>
-                      <p className="memory-content">{v.content || <em className="hint">empty baseline</em>}</p>
-                      <div className="row memory-actions">
-                        <button className="btn-ghost btn-sm" onClick={() => setViewingVersion(null)}>Close</button>
-                        {i !== 0 && (
-                          <button className="btn-ghost btn-sm" disabled={busy} onClick={() => void doRevert(v)}>
-                            Revert to this
-                          </button>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <p className="memory-content">{v.content
-                        ? (v.content.length > 160 ? v.content.slice(0, 160) + '…' : v.content)
-                        : <em className="hint">empty baseline</em>}</p>
-                      <div className="row memory-actions">
-                        <button className="btn-ghost btn-sm" onClick={() => setViewingVersion(v.id)}>View</button>
-                        {i !== 0 && (
-                          <button className="btn-ghost btn-sm danger-text" disabled={busy} onClick={() => void doRevert(v)}>
-                            Revert to this
-                          </button>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </div>
-              ))}
+                )
+              })}
             </div>
           </>
         )}

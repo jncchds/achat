@@ -44,27 +44,38 @@ existing memories are untouched.
 - `dotnet build` 0 warnings; `dotnet test` 124 passed; `npx tsc -b --noEmit` clean.
 - Mock-LLM e2e in Docker (T3/T4): `phase5-mock` 13/13, `traits` 14/14, `phase4` 9/9, `phase6` 14/14,
   `phase8-verify` 8/8, `workqueue` 11/11.
-- **Real model: PENDING.** `scripts/e2e/real-envelope.mjs` is written (25 ordinary turns with 3 planted
-  facts and a repeat, recall far outside the window, an emotional exchange for mood, a creator
-  conversation for traits, Stop + follow-up) but could not run: the LM Studio host at
-  `192.168.2.33:1234` lists its models yet fails to load any of them ("Model is unloaded", "Operation
-  canceled", "Engine protocol startup was aborted"), and no OpenRouter key was available. Fill in
-  once run:
+- **Real model** (`scripts/e2e/real-envelope.mjs`, throwaway stack on 5002, `Chat__HistoryTurns=4`,
+  `Turn__MoodMinMinutes=2` so the mood damper can be exercised on a test timescale; 3 000 max tokens).
+  Main run: OpenRouter **free** models only — chat/utility `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`,
+  embeddings `nvidia/nemotron-3.5-embed-1b:free` (`google/gemma-4-*:free` answered 429 for the whole
+  session). A first pass was also run, before it was ruled out, on a local LM Studio
+  `google/gemma-4-31b-qat` (a reasoning model that returns `reasoning_content`).
 
   | Measure | Result |
   |---|---|
-  | Turns / valid envelope / reply first | _pending_ |
-  | Invalid shapes seen | _pending_ |
-  | Thinking leaked into reply | _pending_ |
-  | Memories planted → stored → deduped → recalled | _pending_ |
-  | Mood changes over ordinary chat / after emotional exchange | _pending_ |
-  | Trait changes (creator) / guardrail drops / revert | _pending_ |
+  | Valid envelope, `reply` first, over 25 ordinary turns | nemotron-nano **25/25** (both prompt versions); gemma-4-31b local **25/25**. No fences, no plain text, no broken JSON seen |
+  | JSON artifacts in streamed deltas / stored reply | none |
+  | Thinking leaked into reply | none (gemma-4-31b: reasoning on 25/25 turns, all in `reasoning_content`; the free nemotron route returns no reasoning field) |
+  | Memories, nemotron, **before** prompt fix | stored on 23/25 turns (26 rows): "User asked what 12 times 12 is", "User thanked me", "User says goodnight" |
+  | Memories, **after** prompt fix | stored on 16/25 turns (16 rows; model still proposed on 18) — trivia mostly gone, near-duplicates ("making soup tonight" twice) are not merged |
+  | Recall far outside the 4-turn window (planted 4 facts, 4 filler turns) | **3/3** (cat's name, wedding city, instrument), memory ids in the footer |
+  | Mood, ordinary chat | 1 applied change (initial mood); the model echoed its current mood on 21/25 turns instead of `null` (harmless, no change) |
+  | Mood, emotional exchange | 1 change ("deeply saddened"), then held for 5 turns; an earlier quicker shift was `MoodDamped` (noted) |
+  | Traits, **before** prompt fix | 3 added during 25 ordinary turns, 10 more proposals dropped by the daily limit |
+  | Traits, **after** prompt fix | 0 in 25 ordinary turns; creator conversation: 3 added over 18 turns, 3 more dropped by the daily limit; one near-duplicate of an existing item |
+  | Revert | restored the empty list; re-revert restored the 3 items |
+  | Stop mid-stream → "try again" | stopped (partial discarded), retry completed a clean reply, deltas clean |
+
+  A garbled envelope never occurred in 50+ real turns, so no parsing change was made.
 
 ## Known limits
-- Real-model behaviour (validity rate, prompt wording, mood/trait restraint) is unmeasured.
+- Small free models are over-eager to record memories and traits; the prompt wording was tightened
+  (see above) but a stronger model is still advisable. The guardrails (3 memories/turn, 3 trait changes/day) held.
+- Near-duplicate memories ("making soup tonight" / "planning to make soup tonight") survive the dedup threshold.
 - Inline `<think>…</think>` in `content` (reasoning models that don't split it out) is not stripped;
-  it would make the envelope invalid and show raw text. Decide after the real run.
-- No `response_format` / JSON mode: LM Studio rejects `json_object`; add per provider only with data.
+  it would make the envelope invalid and show raw text. Not seen with either model tested.
+- No `response_format` / JSON mode: LM Studio rejects `json_object`; with 100% validity measured there is no case for it.
+- A single-model local server (LM Studio) swaps models on every chat/embedding switch (~4 min) and breaks the 120 s default timeout.
 - Humans' trait adds/edits aren't capped by count/total; retired items stay in `BotTraits` for revert.
 - `WorkKind.Extraction`, `InteractionPurpose.MemoryExtraction`, `MemorySource.Extraction` are kept for old rows.
 

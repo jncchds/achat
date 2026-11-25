@@ -136,6 +136,7 @@ ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase6.mjs       # sharing: re
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase8-verify.mjs  # disable/reset, kill switch, quota, usage
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase3.mjs       # needs a REAL model (recall via summary, gap awareness); HistoryTurns=4, SummaryTailTokens=50, GapThresholdMinutes=1
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase7-verify.mjs  # new providers against a live endpoint
+ACHAT_BASE=http://localhost:5002 KEYFILE=<env file with OPENROUTER_API_KEY=...> OUT=out.json node scripts/e2e/real-envelope.mjs  # real hosted model (free OpenRouter ids by default): envelope validity, memories, mood, traits, stop/try again; start the stack with Chat__HistoryTurns=4 (a single-model local server swaps models on every embed/chat switch, ~4 min each)
 BASE=http://localhost:5002 node scripts/e2e/workqueue.mjs          # dead endpoint → summary + consolidation dead-letter → try-again → admin retry
 ```
 

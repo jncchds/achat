@@ -397,7 +397,11 @@ debuggability outweigh the storage cost. The log remains admin-scoped (§2.5.3).
   message; there is no mid-stream retry. The interaction log records the terminal status.
   (Supersedes the "no automatic retry" note in §3, which predates Phase 8.)
 
-### 4.6 Tool use / function calling `[DECIDED — out of scope for v1]`
+### 4.6 Tool use / function calling `[DECIDED — dropped; superseded by §4.7]`
+
+> **Superseded.** Tool calling is no longer planned. What `remember(...)` was meant to give —
+> the bot recording what matters *in the moment* — is delivered by the structured turn
+> envelope (§4.7), with no tool-call round-trip. The text below is kept for history.
 
 No tool calling in v1. The "agentic" character of AChat comes from autonomous memory
 formation and retrieval, not from external actions. Reminders are the most likely first tool
@@ -420,6 +424,114 @@ enough that adding them later is additive rather than a migration of existing ro
 Both are worth keeping in view while designing §5, since `remember(...)` writes to exactly the
 same `Memory` table extraction does. The schema should not assume extraction is the only
 writer.
+
+### 4.7 Structured turn envelope `[DECIDED — design; not yet implemented]`
+
+**Decision.** Every chat turn returns one JSON object instead of bare text. The bot says its
+reply *and* reports what the turn changed — in the same call, with the same context it used to
+answer. This replaces the tool-calling plan (§4.6) and, in time, the separate background
+passes for memory extraction (§5.3) and persona evolution (§2.4). The rolling summary
+(§5.3) stays a background job — it is a rewrite of old history, not a reaction to a turn.
+
+Why: the bot knows in the moment what mattered ("she asked me not to bring this up again",
+"we've settled into teasing each other") in a way an after-the-fact pass over transcript text
+does not, and it costs no extra calls. The price is that the generation model must produce
+valid JSON, and that the bot is now its own scribe — hence the guardrails below.
+
+**Shape** (field order is part of the contract — `reply` first, see Streaming):
+
+```json
+{
+  "reply": "text shown to the user",
+  "mood": "short free-text state, or null to leave unchanged",
+  "memories": [ { "content": "…", "kind": "Fact|Preference|Event|Relationship", "importance": 1 } ],
+  "traits": { "add": ["short observation"], "retire": [12] }
+}
+```
+
+- **`reply`** — the only field the user sees. Required; everything else is optional and
+  defaults to "no change".
+- **`mood`** — the bot's own current state toward this person (e.g. "playful", "worried
+  about her exam"). Stored on the `Conversation` (per `(bot, user)`, like everything
+  relational), injected into the next prompt right after the time line, and shown in the UI.
+  It is *state, not personality*: it may change every turn and is never versioned. Capped in
+  length; null means unchanged, empty string clears it.
+- **`memories`** — things worth remembering, same fields as extraction candidates (§5.3).
+  Written through the **existing pipeline**: embed, dedupe/supersede against the scope,
+  never overwrite a `UserEdited` row, `Source = BotRemember` (already in the enum),
+  `SourceMessageId` = the assistant message. At most `Turn:MaxMemories` (default 3) per turn;
+  the instruction is to record durable facts and events, not pleasantries — `[]` is normal.
+- **`traits`** — drift in the bot's *evolved layer* (§2.4). Applies **only in the creator's
+  conversation**; the field is not offered to the model in anyone else's. `add` appends short
+  observations; `retire` removes earlier ones by id (ids are shown in the prompt).
+  Directives and core are not reachable from here.
+
+**Evolved layer becomes a list.** To make per-turn changes safe and reviewable, the evolved
+layer changes from one rewritten prose document to a list of short *trait items*, each with
+an id, text, timestamp and the message that produced it. Every change still creates a
+`PersonaVersion` row (source `BotTurn`), so history, diff and revert (§2.4) keep working
+unchanged; the prompt renders the current items as the evolved block. `[OPEN]` — whether to
+keep the periodic prose-rewrite pass as a *consolidation* step (merge, de-duplicate and prune
+the list on the utility model) once it grows; recommended, but not needed to ship the envelope.
+
+**Guardrails** (the bot now edits itself, so these are not optional):
+
+- Trait changes are rate-limited: at most `Turn:MaxTraitChangesPerDay` (default 3) applied
+  per bot, and the existing `Evolution:CooldownHours` also resets after a human edit/revert,
+  so a correction is not overwritten the next turn. Over-limit changes are dropped and
+  recorded on the interaction, not queued.
+- The evolved layer has a size cap (items and total characters); over the cap, `add` is
+  refused until something is retired.
+- `Bot.EvolutionEnabled` off ⇒ `traits` is not offered and any returned is ignored.
+- Everything the envelope changed is shown on the message (a small "remembered / changed"
+  footer for the creator) and recorded in the §4.4 log, so "why did my friend change" is
+  answerable from one place.
+
+**Streaming.** `reply` is the first field, so the relay streams its characters as they arrive
+using an incremental JSON string reader (unescaping as it goes); `chat.delta` keeps its
+meaning. The remaining fields arrive after the text and are parsed when the object closes.
+Reasoning deltas (§4.3) are unaffected — they come on their own channel. On
+`chat.completed` the envelope's effects are applied and reported
+(`mood`, `rememberedCount`, `traitChanges`).
+
+**Providers and robustness.** Request JSON mode / a JSON schema where the provider supports
+it (OpenAI-shaped `response_format`; Ollama `format`; Google `responseSchema`); otherwise
+rely on the prompt. Parsing is tolerant: strip code fences, accept a trailing comma. If the
+object is unparseable the turn is **not lost** — the raw text is shown as the reply (or the
+text recovered from a half-streamed `reply` field), no side effects are applied, and the
+interaction is flagged `EnvelopeInvalid` in the log. A truncated reply (`finish_reason=length`)
+is a failure as today (retryable, §12b). Stop mid-stream persists the partial `reply` text
+only — side effects are applied only for a complete envelope.
+
+**What goes away, in order.** Memory extraction: the envelope's `memories` replace the
+worker; the pass may stay behind a config switch (`Extraction:Enabled`, default off) as a
+catch-up for bots on weak models. Persona evolution: `traits` replaces the worker, the prose
+rewrite survives only as the optional consolidation above. Summarisation: unchanged.
+The `ExtractionUpToMessageId` and `Bot.EvolutionUpToMessageId` watermarks become unused.
+
+**Prompt side.** The system block gains the mood line, the numbered trait items, and the
+envelope instructions (schema, when to write a memory, that traits are rare and slow,
+that `reply` must be written in character and contain nothing but the reply). History
+messages sent back to the model carry the stored `reply` text only — never the envelope —
+so the model does not learn to imitate its own metadata.
+
+**Persistence.** `Message` stores the reply text as today; the parsed envelope and what was
+applied are stored on the §4.4 interaction (and a small `Message.Envelope` JSON column for
+the footer). `Conversation.Mood` is new. Trait items are a new table; migrations are
+authored with `dotnet ef`.
+
+**Delivery** (each step leaves the app runnable):
+
+1. Envelope + `reply` streaming + tolerant parsing, `mood` end-to-end. Extraction/evolution
+   workers unchanged.
+2. `memories` through the existing pipeline; extraction worker off by default.
+3. Trait items, `traits` field, guardrails, footer; evolution worker reduced to optional
+   consolidation.
+4. Remove dead code and the unused watermarks; update §5.3 and §2.4.
+
+*Done when*: a turn streams its reply live while the bot sets its mood, records a memory
+that is recalled later, and — in the creator's conversation — adds a trait that appears in
+the history and reverts cleanly; a model that returns garbage still produces a visible reply.
 
 ---
 
@@ -1380,7 +1492,7 @@ the key. The UI shows a *Try again* button on the failed turn.
 
 ## 13. Open Questions — Consolidated
 
-**Resolved so far:** tool calling out of v1 (§4.6) · proactive messaging out of v1 (§2.3) ·
+**Resolved so far:** tool calling dropped in favour of the structured turn envelope (§4.7) · proactive messaging out of v1 (§2.3) ·
 memory per `(BotId, UserId)` (§5.1) · bot roles and creator-owned personality (§2.5) ·
 Data Protection for API keys (§7.3) · manual DB access read-only, tests may write (§6) ·
 Grove palette (§9.2) · four providers including GoogleAIStudio (§3) · project layout and

@@ -48,11 +48,7 @@ with the `ACHAT_` prefix and .NET nested-key convention (`ACHAT_Section__Key`):
 | `Memory__WeightSimilarity` / `WeightImportance` / `WeightRecency` | `0.6 / 0.2 / 0.2` | Ranking weights (§5.4) |
 | `Memory__RecencyHalflifeDays` | `30` | Recency decay half-life |
 | `Memory__DedupThreshold` / `SupersedeThreshold` | `0.92 / 0.85` | Candidate-vs-nearest similarity: ≥0.92 drop as duplicate, ≥0.85 supersede (§5.3) |
-| `Extraction__MinNewMessages` | `8` | New messages since the watermark that trigger an extraction pass (§5.3) |
-| `Extraction__IdleMinutes` | `10` | …or conversation idle for this long |
-| `Extraction__MaxCandidates` | `10` | Cap on candidates per pass |
-| `Extraction__MaxTailMessages` | `40` | Tail size sent to the extractor |
-| `Extraction__MaxTokens` | `1024` | Output cap for the extraction call (covers reasoning-model thinking) |
+| `Turn__MaxMemories` | `3` | Most memories the bot may record in one turn's envelope (§4.7) |
 | `Evolution__MinNewMessages` | `40` | New creator messages since the last pass that trigger an evolution rewrite (§2.4) |
 | `Evolution__CooldownHours` | `12` | Cooldown between rewrites — a human edit or revert also resets it |
 | `Evolution__MaxTailMessages` | `60` | Conversation tail sent to the evolver |

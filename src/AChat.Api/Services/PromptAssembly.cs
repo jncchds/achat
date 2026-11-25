@@ -152,7 +152,8 @@ public static class PromptAssembly
         IReadOnlyCollection<string>? directives = null,
         string? mood = null,
         DateTime? moodSince = null,
-        bool envelope = false)
+        bool envelope = false,
+        bool envelopeMemories = false)
     {
         var sb = new System.Text.StringBuilder();
         sb.Append(BuildPersonaBlock(bot, evolvedTraits, directives));
@@ -176,21 +177,37 @@ public static class PromptAssembly
                 block = TruncateToTokens(block, budget.SummaryTokens, keepEnd: true);
             sb.Append('\n').Append(block).Append('\n');
         }
-        if (envelope) sb.Append('\n').Append(EnvelopeInstructions);
+        if (envelope) sb.Append('\n').Append(BuildEnvelopeInstructions(envelopeMemories));
         return sb.ToString();
     }
 
-    /// <summary>How the model must shape its answer (§4.7).</summary>
-    public const string EnvelopeInstructions =
-        "Response format — reply with ONE JSON object and nothing else (no code fence, no text outside it):\n" +
-        "{\"reply\": \"<what you say to them, in character>\", \"mood\": null}\n" +
-        "- \"reply\" must come first. It is the only thing the user sees: write it exactly as you would " +
-        "say it, with no JSON, notes or stage directions about this format inside it.\n" +
-        "- \"mood\" is your own current state toward this person, a few words (e.g. \"warm and relaxed\", " +
-        "\"quietly worried about their exam\"). Mood is a slow undercurrent that follows from how the " +
-        "conversation has actually gone — it does not react to each message. Almost every turn should be " +
-        "null (keep the current mood). Set a new one only when something in the conversation has genuinely " +
-        "shifted how you feel, and never more than occasionally.\n";
+    /// <summary>
+    /// How the model must shape its answer (§4.7). <paramref name="memories"/> offers the
+    /// <c>memories</c> field — only when the preset can embed them.
+    /// </summary>
+    public static string BuildEnvelopeInstructions(bool memories)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("Response format — reply with ONE JSON object and nothing else (no code fence, no text outside it):\n");
+        sb.Append(memories
+            ? "{\"reply\": \"<what you say to them, in character>\", \"mood\": null, \"memories\": []}\n"
+            : "{\"reply\": \"<what you say to them, in character>\", \"mood\": null}\n");
+        sb.Append("- \"reply\" must come first. It is the only thing the user sees: write it exactly as you would " +
+                  "say it, with no JSON, notes or stage directions about this format inside it.\n");
+        sb.Append("- \"mood\" is your own current state toward this person, a few words (e.g. \"warm and relaxed\", " +
+                  "\"quietly worried about their exam\"). Mood is a slow undercurrent that follows from how the " +
+                  "conversation has actually gone — it does not react to each message. Almost every turn should be " +
+                  "null (keep the current mood). Set a new one only when something in the conversation has genuinely " +
+                  "shifted how you feel, and never more than occasionally.\n");
+        if (memories)
+            sb.Append("- \"memories\" is what you want to remember from THIS exchange for the long run: durable facts and " +
+                      "meaningful events about them — who they are, people and pets in their life, what they like, what " +
+                      "happened, what they plan, what they asked of you. Each element: {\"content\": \"<one standalone " +
+                      "sentence, no pronouns that need context>\", \"kind\": \"fact\"|\"preference\"|\"event\"|" +
+                      "\"relationship\", \"importance\": 1-5}. Skip pleasantries and anything you already remember " +
+                      "(see the memories above). Most turns should be an empty array.\n");
+        return sb.ToString();
+    }
 
     /// <summary>"3 days", "2 hours", "40 minutes" — coarse, for the mood line.</summary>
     public static string FormatDuration(TimeSpan span)

@@ -22,6 +22,8 @@ public sealed class ChatService
     private readonly int _historyTurns;
     private readonly TimeSpan _gapThreshold;
     private readonly PromptBudget _budget;
+    private readonly int _maxMemories;
+    private readonly float _dedupThreshold, _supersedeThreshold;
     private readonly int _moodMinTurns;
     private readonly int _moodMinMinutes;
 
@@ -37,7 +39,8 @@ public sealed class ChatService
         int? TotalTokens,
         IReadOnlyList<int> RecalledMemoryIds,
         string? Mood = null,
-        bool MoodChanged = false);
+        bool MoodChanged = false,
+        int Remembered = 0);
 
     public ChatService(AppDbContext db, ILlmProviderFactory factory, IApiKeyProtector keys,
         MemoryRetriever memories, IConfiguration config, ILogger<ChatService> log)
@@ -51,6 +54,9 @@ public sealed class ChatService
         _historyTurns = config.GetValue("Chat:HistoryTurns", 20);
         _gapThreshold = TimeSpan.FromMinutes(config.GetValue("Chat:GapThresholdMinutes", 360));
         _budget = PromptBudget.FromConfiguration(config);
+        _maxMemories = config.GetValue("Turn:MaxMemories", 3);
+        _dedupThreshold = config.GetValue("Memory:DedupThreshold", 0.92f);
+        _supersedeThreshold = config.GetValue("Memory:SupersedeThreshold", 0.85f);
         _moodMinTurns = config.GetValue("Turn:MoodMinTurns", 6);
         _moodMinMinutes = config.GetValue("Turn:MoodMinMinutes", 30);
     }
@@ -362,7 +368,8 @@ public sealed class ChatService
         var systemBlock = PromptAssembly.BuildSystemBlock(
             bot, user?.Timezone, now, summary, _budget, memoryBlock,
             evolvedTraits, directives,
-            conversation.Mood, conversation.MoodChangedAt, envelope: true);
+            conversation.Mood, conversation.MoodChangedAt, envelope: true,
+            envelopeMemories: !string.IsNullOrWhiteSpace(preset.EmbeddingModel));
 
         // Recent history: last N turns verbatim, with gap markers where the silence
         // was long enough to be noticed (§5.9.2).
@@ -478,6 +485,7 @@ public sealed class ChatService
         var notes = new List<string>();
         if (completed && fullContent.Length > 0 && !envelope.Valid) notes.Add("EnvelopeInvalid");
         var moodChanged = false;
+        var remembered = 0;
         if (completed && envelope.Valid && envelope.MoodSet)
             moodChanged = await ApplyMoodAsync(conversation, envelope.Mood!, userMessage.Id, notes);
 
@@ -496,6 +504,31 @@ public sealed class ChatService
             conversation.LastMessageAt = assistant.CreatedAt;
             await _db.SaveChangesAsync();
             assistantMessageId = assistant.Id;
+
+            // §4.7: memories the bot chose to keep. Best-effort — an embedding or SQL
+            // failure never costs the user their reply; it is noted on the interaction.
+            if (completed && envelope.Valid && envelope.Memories is { Count: > 0 })
+            {
+                if (string.IsNullOrWhiteSpace(preset.EmbeddingModel))
+                    notes.Add("MemoriesIgnored: preset has no embedding model");
+                else
+                {
+                    try
+                    {
+                        var wanted = envelope.Memories.Take(_maxMemories).ToList();
+                        var written = await MemoryWriter.StoreAsync(_db, provider, preset.EmbeddingModel,
+                            bot.Id, userId, wanted, assistant.Id, _dedupThreshold, _supersedeThreshold, ct);
+                        remembered = written.Stored.Count;
+                        notes.Add($"Remembered {written.Stored.Count} of {envelope.Memories.Count} " +
+                                  $"(ids {string.Join(",", written.Stored)}; superseded {written.Superseded.Count})");
+                    }
+                    catch (Exception ex) when (!ct.IsCancellationRequested)
+                    {
+                        _log.LogWarning(ex, "Storing bot memories failed for bot {BotId}", bot.Id);
+                        notes.Add("MemoriesFailed: " + ex.Message);
+                    }
+                }
+            }
         }
         else if (failed || canceled)
         {
@@ -561,7 +594,8 @@ public sealed class ChatService
             totalTokens,
             recalled.Select(m => m.Memory.Id).ToArray(),
             conversation.Mood,
-            moodChanged);
+            moodChanged,
+            remembered);
     }
 
     /// <summary>History budget: keep the newest messages, drop oldest first (§5.5).</summary>

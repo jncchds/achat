@@ -298,61 +298,28 @@ public class MemoryRetrievalTests
     }
 }
 
-public class ExtractionLogicTests
+public class MemoryWriterLogicTests
 {
-    [Fact]
-    public void ParseCandidates_handles_fences_prose_and_bad_elements()
-    {
-        var raw = "Sure! Here is the array:\n```json\n[\n"
-            + "{\"content\": \"User's cat is named Pixel\", \"kind\": \"fact\", \"importance\": 4},\n"
-            + "{\"content\": \"\"},\n"
-            + "{\"kind\": \"event\"},\n"
-            + "42\n"
-            + "]\n```\nHope that helps!";
-
-        var result = ExtractionHandler.ParseCandidates(raw, max: 10);
-        Assert.Single(result);
-        Assert.Equal("User's cat is named Pixel", result[0].Content);
-        Assert.Equal(MemoryKind.Fact, result[0].Kind);
-        Assert.Equal(4, result[0].Importance);
-    }
-
-    [Fact]
-    public void ParseCandidates_clamps_importance_and_respects_max()
-    {
-        var raw = "[{\"content\":\"a\",\"importance\":99},{\"content\":\"b\"},{\"content\":\"c\"}]";
-        var result = ExtractionHandler.ParseCandidates(raw, max: 2);
-        Assert.Equal(2, result.Count);
-        Assert.Equal(5, result[0].Importance); // clamped to 1..5
-    }
-
-    [Fact]
-    public void ParseCandidates_returns_empty_on_garbage()
-    {
-        Assert.Empty(ExtractionHandler.ParseCandidates("no json here", 5));
-        Assert.Empty(ExtractionHandler.ParseCandidates("[{broken", 5));
-    }
-
     [Fact]
     public void Decide_drops_duplicates_and_respects_human_edits()
     {
         // Near-identical → always a duplicate, even over a human edit.
-        Assert.Equal(ExtractionHandler.CandidateAction.Drop,
-            ExtractionHandler.Decide(0.95f, MemorySource.Extraction));
-        Assert.Equal(ExtractionHandler.CandidateAction.Drop,
-            ExtractionHandler.Decide(0.95f, MemorySource.UserEdited));
+        Assert.Equal(MemoryWriter.CandidateAction.Drop,
+            MemoryWriter.Decide(0.95f, MemorySource.BotRemember));
+        Assert.Equal(MemoryWriter.CandidateAction.Drop,
+            MemoryWriter.Decide(0.95f, MemorySource.UserEdited));
 
         // Similar but not identical → supersede…
-        Assert.Equal(ExtractionHandler.CandidateAction.Supersede,
-            ExtractionHandler.Decide(0.90f, MemorySource.Extraction));
+        Assert.Equal(MemoryWriter.CandidateAction.Supersede,
+            MemoryWriter.Decide(0.90f, MemorySource.BotRemember));
 
         // …unless a human edited the existing row (§5.6).
-        Assert.Equal(ExtractionHandler.CandidateAction.Drop,
-            ExtractionHandler.Decide(0.90f, MemorySource.UserEdited));
+        Assert.Equal(MemoryWriter.CandidateAction.Drop,
+            MemoryWriter.Decide(0.90f, MemorySource.UserEdited));
 
         // Unrelated → fresh insert.
-        Assert.Equal(ExtractionHandler.CandidateAction.Insert,
-            ExtractionHandler.Decide(0.50f, MemorySource.Extraction));
+        Assert.Equal(MemoryWriter.CandidateAction.Insert,
+            MemoryWriter.Decide(0.50f, MemorySource.BotRemember));
     }
 }
 

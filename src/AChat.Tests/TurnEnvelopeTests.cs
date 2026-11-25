@@ -57,6 +57,29 @@ public class TurnEnvelopeTests
     }
 
     [Fact]
+    public void Parse_reads_memories_leniently()
+    {
+        var e = TurnEnvelope.Parse("{\"reply\":\"ok\",\"memories\":["
+            + "{\"content\":\" Her cat is named Pixel \",\"kind\":\"Fact\",\"importance\":99},"
+            + "{\"content\":\"\"},{\"kind\":\"event\"},42,"
+            + "{\"content\":\"Exam on Friday\",\"kind\":\"nonsense\"}]}");
+        Assert.True(e.Valid);
+        Assert.NotNull(e.Memories);
+        Assert.Equal(2, e.Memories!.Count);
+        Assert.Equal("Her cat is named Pixel", e.Memories[0].Content);
+        Assert.Equal(5, e.Memories[0].Importance); // clamped to 1..5
+        Assert.Equal(AChat.Core.Models.MemoryKind.Fact, e.Memories[1].Kind); // unknown kind → Fact
+        Assert.Null(TurnEnvelope.Parse("{\"reply\":\"ok\",\"memories\":[]}").Memories);
+    }
+
+    [Fact]
+    public void Memories_field_is_offered_only_with_an_embedding_model()
+    {
+        Assert.Contains("\"memories\"", PromptAssembly.BuildEnvelopeInstructions(true));
+        Assert.DoesNotContain("\"memories\"", PromptAssembly.BuildEnvelopeInstructions(false));
+    }
+
+    [Fact]
     public void Garbled_or_plain_output_is_not_lost_and_has_no_side_effects()
     {
         var plain = TurnEnvelope.Parse("Just a normal answer.");

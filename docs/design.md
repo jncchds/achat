@@ -425,7 +425,7 @@ Both are worth keeping in view while designing §5, since `remember(...)` writes
 same `Memory` table extraction does. The schema should not assume extraction is the only
 writer.
 
-### 4.7 Structured turn envelope `[DECIDED — design; not yet implemented]`
+### 4.7 Structured turn envelope `[DECIDED — steps 1–2 implemented: reply, mood, memories]`
 
 **Decision.** Every chat turn returns one JSON object instead of bare text. The bot says its
 reply *and* reports what the turn changed — in the same call, with the same context it used to
@@ -572,7 +572,14 @@ Summary and memory serve different jobs and are both needed: the summary keeps t
 the relationship ("you have been talking about her thesis for weeks"), while memories recall
 *specifics* that similarity search can surface from months back ("her sister is named Ann").
 
-### 5.3 Memory formation `[DECIDED — implemented in Phase 4]`
+### 5.3 Memory formation `[DECIDED — implemented in Phase 4; extraction worker retired by §4.7 step 2]`
+
+> **Update.** The background extraction pass described below no longer exists. The bot records
+> memories itself in the turn envelope (§4.7, `memories`), through the same embed → dedupe →
+> supersede pipeline (`MemoryWriter`; thresholds and the `UserEdited`-wins rule unchanged), with
+> `Source = BotRemember`. The `Extraction:*` settings and the extraction work kind are gone
+> (`WorkKind.Extraction` stays in the enum so old rows still map). The summary pass below is
+> unchanged. Text below is kept as the history of the decision.
 
 A background hosted service — `MemoryExtractionService` — reads new messages and writes
 memories. It is **not** in the request path; a turn never waits on extraction.

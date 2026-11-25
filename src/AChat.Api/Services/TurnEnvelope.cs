@@ -14,7 +14,9 @@ namespace AChat.Api.Services;
 /// (an empty string means "clear the mood"; null / absent means unchanged).</param>
 /// <param name="Mood">New mood text when <paramref name="MoodSet"/>.</param>
 /// <param name="Valid">The whole object parsed. When false no side effects are applied.</param>
-public sealed record TurnEnvelope(string Reply, bool MoodSet, string? Mood, bool Valid)
+/// <param name="Memories">Things the bot asked to remember (§4.7); null when none. Not yet capped.</param>
+public sealed record TurnEnvelope(string Reply, bool MoodSet, string? Mood, bool Valid,
+    IReadOnlyList<MemoryCandidate>? Memories = null)
 {
     public const int MaxMoodLength = 120;
 
@@ -45,13 +47,39 @@ public sealed record TurnEnvelope(string Reply, bool MoodSet, string? Mood, bool
                     mood = m.GetString()!.Trim();
                     if (mood.Length > MaxMoodLength) mood = mood[..MaxMoodLength].TrimEnd();
                 }
-                return new TurnEnvelope(r.GetString()!.Trim(), moodSet, mood, true);
+                return new TurnEnvelope(r.GetString()!.Trim(), moodSet, mood, true,
+                    ParseMemories(doc.RootElement));
             }
         }
         catch (JsonException) { /* fall through to recovery */ }
 
         var recovered = !string.IsNullOrWhiteSpace(streamedReply) ? streamedReply!.Trim() : raw.Trim();
         return new TurnEnvelope(recovered, false, null, false);
+    }
+
+    /// <summary>Lenient: skips malformed elements, clamps importance, defaults the kind to Fact.</summary>
+    private static List<MemoryCandidate>? ParseMemories(JsonElement root)
+    {
+        if (!root.TryGetProperty("memories", out var arr) || arr.ValueKind != JsonValueKind.Array) return null;
+        var result = new List<MemoryCandidate>();
+        foreach (var el in arr.EnumerateArray())
+        {
+            if (el.ValueKind != JsonValueKind.Object) continue;
+            if (!el.TryGetProperty("content", out var c) || c.ValueKind != JsonValueKind.String) continue;
+            var content = c.GetString()?.Trim();
+            if (string.IsNullOrEmpty(content)) continue;
+
+            var kind = AChat.Core.Models.MemoryKind.Fact;
+            if (el.TryGetProperty("kind", out var k) && k.ValueKind == JsonValueKind.String)
+                Enum.TryParse(k.GetString(), ignoreCase: true, out kind);
+
+            var importance = 3;
+            if (el.TryGetProperty("importance", out var imp) && imp.TryGetInt32(out var v))
+                importance = Math.Clamp(v, 1, 5);
+
+            result.Add(new MemoryCandidate(content, kind, importance));
+        }
+        return result.Count > 0 ? result : null;
     }
 
     private static string StripFence(string raw)

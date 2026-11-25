@@ -16,6 +16,8 @@ interface UiMsg {
   at: string
   /** Memory ids this reply leaned on (§5.6) — shown as a link to the memories page. */
   recalled?: number[]
+  /** Memories the bot chose to keep from this exchange (§4.7). */
+  remembered?: number
 }
 
 function toUiMsg(m: Message): UiMsg {
@@ -94,10 +96,10 @@ export default function Chat() {
         })
       }).catch(() => {})
 
-    conn.on('chat.completed', (m: { recalledMemoryIds?: number[]; mood?: string | null }) => {
+    conn.on('chat.completed', (m: { recalledMemoryIds?: number[]; mood?: string | null; remembered?: number }) => {
       const recalled = m?.recalledMemoryIds ?? []
       if (m && 'mood' in m) setMood(m.mood ?? null)
-      patchStreaming(d => ({ ...d, streaming: false, complete: true, recalled }))
+      patchStreaming(d => ({ ...d, streaming: false, complete: true, recalled, remembered: m?.remembered ?? 0 }))
       streamingKey.current = null
       setBusy(false)
       refresh()
@@ -262,6 +264,11 @@ export default function Chat() {
             {m.role === 'Assistant' && (m.recalled?.length ?? 0) > 0 && (
               <Link to={`/bots/${id}/memories`} className="msg-recalled">
                 🧠 remembered {m.recalled!.length} {m.recalled!.length === 1 ? 'thing' : 'things'} from your conversations — see what’s on file
+              </Link>
+            )}
+            {m.role === 'Assistant' && (m.remembered ?? 0) > 0 && (
+              <Link to={`/bots/${id}/memories`} className="msg-recalled">
+                📝 noted {m.remembered} {m.remembered === 1 ? 'thing' : 'things'} to remember — see what’s on file
               </Link>
             )}
             {!m.complete && m.error && <span className="msg-error">{m.error}</span>}

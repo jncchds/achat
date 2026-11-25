@@ -20,6 +20,7 @@ public class AppDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<Bot> Bots => Set<Bot>();
     public DbSet<BotDirective> BotDirectives => Set<BotDirective>();
     public DbSet<PersonaVersion> PersonaVersions => Set<PersonaVersion>();
+    public DbSet<BotTrait> BotTraits => Set<BotTrait>();
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<Memory> Memories => Set<Memory>();
@@ -103,6 +104,15 @@ public class AppDbContext : DbContext, IDataProtectionKeyContext
             v.Property(x => x.Content).IsRequired();
             v.Property(x => x.Source).HasDefaultValue(PersonaVersionSource.Initial);
             v.HasOne(x => x.Bot).WithMany().HasForeignKey(x => x.BotId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── BotTrait: items of the evolved layer (§2.4, §4.7) ─────────────────
+        modelBuilder.Entity<BotTrait>(t =>
+        {
+            t.ToTable("BotTraits");
+            t.HasIndex(x => new { x.BotId, x.RetiredAt });
+            t.Property(x => x.Text).IsRequired();
+            t.HasOne(x => x.Bot).WithMany().HasForeignKey(x => x.BotId).OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── Conversation: one continuous timeline per (BotId, UserId) (§2.3) ──

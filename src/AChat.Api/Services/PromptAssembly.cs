@@ -153,7 +153,8 @@ public static class PromptAssembly
         string? mood = null,
         DateTime? moodSince = null,
         bool envelope = false,
-        bool envelopeMemories = false)
+        bool envelopeMemories = false,
+        bool envelopeTraits = false)
     {
         var sb = new System.Text.StringBuilder();
         sb.Append(BuildPersonaBlock(bot, evolvedTraits, directives));
@@ -177,21 +178,23 @@ public static class PromptAssembly
                 block = TruncateToTokens(block, budget.SummaryTokens, keepEnd: true);
             sb.Append('\n').Append(block).Append('\n');
         }
-        if (envelope) sb.Append('\n').Append(BuildEnvelopeInstructions(envelopeMemories));
+        if (envelope) sb.Append('\n').Append(BuildEnvelopeInstructions(envelopeMemories, envelopeTraits));
         return sb.ToString();
     }
 
     /// <summary>
     /// How the model must shape its answer (§4.7). <paramref name="memories"/> offers the
-    /// <c>memories</c> field — only when the preset can embed them.
+    /// <c>memories</c> field — only when the preset can embed them. <paramref name="traits"/> offers
+    /// the <c>traits</c> field — only to the bot's creator with evolution on.
     /// </summary>
-    public static string BuildEnvelopeInstructions(bool memories)
+    public static string BuildEnvelopeInstructions(bool memories, bool traits = false)
     {
         var sb = new System.Text.StringBuilder();
         sb.Append("Response format — reply with ONE JSON object and nothing else (no code fence, no text outside it):\n");
-        sb.Append(memories
-            ? "{\"reply\": \"<what you say to them, in character>\", \"mood\": null, \"memories\": []}\n"
-            : "{\"reply\": \"<what you say to them, in character>\", \"mood\": null}\n");
+        sb.Append("{\"reply\": \"<what you say to them, in character>\", \"mood\": null");
+        if (memories) sb.Append(", \"memories\": []");
+        if (traits) sb.Append(", \"traits\": {\"add\": [], \"retire\": []}");
+        sb.Append("}\n");
         sb.Append("- \"reply\" must come first. It is the only thing the user sees: write it exactly as you would " +
                   "say it, with no JSON, notes or stage directions about this format inside it.\n");
         sb.Append("- \"mood\" is your own current state toward this person, a few words (e.g. \"warm and relaxed\", " +
@@ -206,6 +209,13 @@ public static class PromptAssembly
                       "sentence, no pronouns that need context>\", \"kind\": \"fact\"|\"preference\"|\"event\"|" +
                       "\"relationship\", \"importance\": 1-5}. Skip pleasantries and anything you already remember " +
                       "(see the memories above). Most turns should be an empty array.\n");
+        if (traits)
+            sb.Append("- \"traits\" changes how you see yourself, in the list \"How your friendship has shaped you\" above. " +
+                      "This is rare and slow: only when this friendship has genuinely changed you in a lasting way, a few times " +
+                      "a month at most — almost every turn is {\"add\": [], \"retire\": []}. \"add\" is short strings (one " +
+                      "phrase each, about the two of you: a habit, a shared joke, a way you've grown) — never about the " +
+                      "world, never your core identity or standing instructions, which you cannot change. \"retire\" is the " +
+                      "numbers in [brackets] of items that no longer hold. Don't repeat an item that is already listed.\n");
         return sb.ToString();
     }
 

@@ -26,6 +26,8 @@ public sealed class ChatService
     private readonly float _dedupThreshold, _supersedeThreshold;
     private readonly int _moodMinTurns;
     private readonly int _moodMinMinutes;
+    private readonly TraitLimits _traitLimits;
+    private readonly int _cooldownHours;
 
     public sealed record ChatRunResult(
         int UserMessageId,
@@ -40,7 +42,8 @@ public sealed class ChatService
         IReadOnlyList<int> RecalledMemoryIds,
         string? Mood = null,
         bool MoodChanged = false,
-        int Remembered = 0);
+        int Remembered = 0,
+        PersonaTraits.Summary? TraitChanges = null);
 
     public ChatService(AppDbContext db, ILlmProviderFactory factory, IApiKeyProtector keys,
         MemoryRetriever memories, IConfiguration config, ILogger<ChatService> log)
@@ -59,6 +62,8 @@ public sealed class ChatService
         _supersedeThreshold = config.GetValue("Memory:SupersedeThreshold", 0.85f);
         _moodMinTurns = config.GetValue("Turn:MoodMinTurns", 6);
         _moodMinMinutes = config.GetValue("Turn:MoodMinMinutes", 30);
+        _traitLimits = TraitLimits.From(config);
+        _cooldownHours = config.GetValue("Evolution:CooldownHours", 12);
     }
 
     /// <summary>
@@ -350,11 +355,10 @@ public sealed class ChatService
 
         // The bot's current personality layers (§2.4): the latest evolved-traits
         // version and the active directives — directives last, so they win ties.
-        var evolvedTraits = await _db.PersonaVersions.AsNoTracking()
-            .Where(v => v.BotId == bot.Id)
-            .OrderByDescending(v => v.Id)
-            .Select(v => v.Content)
-            .FirstOrDefaultAsync(ct);
+        // Traits can be offered (and retired by id) only to the creator with evolution on (§4.7).
+        var offerTraits = PersonaTraits.CanChange(bot, userId);
+        var evolvedTraits = PersonaTraits.RenderForPrompt(
+            await PersonaTraits.ActiveAsync(_db, bot.Id, ct), withIds: offerTraits);
         var directives = await _db.BotDirectives.AsNoTracking()
             .Where(d => d.BotId == bot.Id && d.IsActive)
             .OrderBy(d => d.Id)
@@ -369,7 +373,8 @@ public sealed class ChatService
             bot, user?.Timezone, now, summary, _budget, memoryBlock,
             evolvedTraits, directives,
             conversation.Mood, conversation.MoodChangedAt, envelope: true,
-            envelopeMemories: !string.IsNullOrWhiteSpace(preset.EmbeddingModel));
+            envelopeMemories: !string.IsNullOrWhiteSpace(preset.EmbeddingModel),
+            envelopeTraits: offerTraits);
 
         // Recent history: last N turns verbatim, with gap markers where the silence
         // was long enough to be noticed (§5.9.2).
@@ -486,6 +491,8 @@ public sealed class ChatService
         if (completed && fullContent.Length > 0 && !envelope.Valid) notes.Add("EnvelopeInvalid");
         var moodChanged = false;
         var remembered = 0;
+        PersonaTraits.Summary? traitSummary = null;
+        PersonaVersion? traitVersion = null;
         if (completed && envelope.Valid && envelope.MoodSet)
             moodChanged = await ApplyMoodAsync(conversation, envelope.Mood!, userMessage.Id, notes);
 
@@ -535,6 +542,21 @@ public sealed class ChatService
             await _db.SaveChangesAsync();
         }
 
+        // §4.7: the bot's own trait changes — creator only, evolution on, guardrails, versioned.
+        if (completed && envelope.Valid && envelope.Traits is not null && assistantMessageId is { } traitMsgId)
+        {
+            try
+            {
+                (traitSummary, traitVersion) = await PersonaTraits.ApplyBotChangesAsync(
+                    _db, bot, userId, envelope.Traits, traitMsgId, _traitLimits, _cooldownHours, notes, ct);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                _log.LogWarning(ex, "Applying trait changes failed for bot {BotId}", bot.Id);
+                notes.Add("TraitsFailed: " + ex.Message);
+            }
+        }
+
         // ── Interaction log — every call, success or failure (§4.4) ─────────────
         var requestBody = System.Text.Json.JsonSerializer.Serialize(
             requestMessages
@@ -581,6 +603,11 @@ public sealed class ChatService
         }
 
         await _db.SaveChangesAsync();
+        if (traitVersion is not null)
+        {
+            traitVersion.InteractionId = interaction.Id; // audit trail back to the turn
+            await _db.SaveChangesAsync();
+        }
 
         return new ChatRunResult(
             userMessage.Id,
@@ -595,7 +622,8 @@ public sealed class ChatService
             recalled.Select(m => m.Memory.Id).ToArray(),
             conversation.Mood,
             moodChanged,
-            remembered);
+            remembered,
+            traitSummary);
     }
 
     /// <summary>History budget: keep the newest messages, drop oldest first (§5.5).</summary>

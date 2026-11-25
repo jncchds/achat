@@ -91,4 +91,57 @@ public class TurnEnvelopeTests
         Assert.Equal("half a thou", truncated.Reply);
         Assert.False(truncated.MoodSet);
     }
+
+    [Fact]
+    public void Parse_reads_traits_leniently()
+    {
+        var e = TurnEnvelope.Parse("{\"reply\":\"ok\",\"traits\":{\"add\":[\" teases them about cooking \",\"\",\"Teases them about cooking\",7,null],"
+            + "\"retire\":[12,\"x\",3.5,12,null,4]}}");
+        Assert.True(e.Valid);
+        Assert.NotNull(e.Traits);
+        Assert.Equal(new[] { "teases them about cooking" }, e.Traits!.Add);
+        Assert.Equal(new[] { 12, 4 }, e.Traits.Retire);
+    }
+
+    [Theory]
+    [InlineData("{\"reply\":\"a\",\"traits\":{\"add\":[],\"retire\":[]}}")]
+    [InlineData("{\"reply\":\"a\",\"traits\":[\"x\"]}")]
+    [InlineData("{\"reply\":\"a\",\"traits\":{\"add\":\"x\",\"retire\":\"1\"}}")]
+    [InlineData("{\"reply\":\"a\"}")]
+    public void Empty_or_malformed_traits_are_null(string raw)
+    {
+        Assert.Null(TurnEnvelope.Parse(raw).Traits);
+    }
+
+    [Fact]
+    public void Traits_field_is_offered_only_when_asked_for()
+    {
+        Assert.Contains("\"traits\"", PromptAssembly.BuildEnvelopeInstructions(true, true));
+        Assert.DoesNotContain("\"traits\"", PromptAssembly.BuildEnvelopeInstructions(true));
+        Assert.DoesNotContain("\"traits\"", PromptAssembly.BuildEnvelopeInstructions(false, false));
+    }
+
+    [Fact]
+    public void System_block_offers_traits_with_ids_only_to_the_creator_with_evolution_on()
+    {
+        var bot = new AChat.Core.Models.Bot { Id = 1, OwnerId = 5, Name = "M", EvolutionEnabled = true };
+        var items = new[] { new TraitItem(12, "teases them about cooking") };
+        string Block(int userId)
+        {
+            var offer = PersonaTraits.CanChange(bot, userId);
+            return PromptAssembly.BuildSystemBlock(bot, null, DateTime.UtcNow, null,
+                evolvedTraits: PersonaTraits.RenderForPrompt(items, offer), envelope: true, envelopeTraits: offer);
+        }
+        var creator = Block(5);
+        Assert.Contains("[12] teases them about cooking", creator);
+        Assert.Contains("\"traits\"", creator);
+
+        var other = Block(6);
+        Assert.Contains("- teases them about cooking", other);
+        Assert.DoesNotContain("[12]", other);
+        Assert.DoesNotContain("\"traits\"", other);
+
+        bot.EvolutionEnabled = false;
+        Assert.DoesNotContain("\"traits\"", Block(5));
+    }
 }

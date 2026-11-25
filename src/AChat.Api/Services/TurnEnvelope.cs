@@ -15,8 +15,10 @@ namespace AChat.Api.Services;
 /// <param name="Mood">New mood text when <paramref name="MoodSet"/>.</param>
 /// <param name="Valid">The whole object parsed. When false no side effects are applied.</param>
 /// <param name="Memories">Things the bot asked to remember (§4.7); null when none. Not yet capped.</param>
+/// <param name="Traits">Trait changes the bot asked for (§4.7); null when none. Guardrails apply later.</param>
 public sealed record TurnEnvelope(string Reply, bool MoodSet, string? Mood, bool Valid,
-    IReadOnlyList<MemoryCandidate>? Memories = null)
+    IReadOnlyList<MemoryCandidate>? Memories = null,
+    TraitChanges? Traits = null)
 {
     public const int MaxMoodLength = 120;
 
@@ -48,7 +50,7 @@ public sealed record TurnEnvelope(string Reply, bool MoodSet, string? Mood, bool
                     if (mood.Length > MaxMoodLength) mood = mood[..MaxMoodLength].TrimEnd();
                 }
                 return new TurnEnvelope(r.GetString()!.Trim(), moodSet, mood, true,
-                    ParseMemories(doc.RootElement));
+                    ParseMemories(doc.RootElement), ParseTraits(doc.RootElement));
             }
         }
         catch (JsonException) { /* fall through to recovery */ }
@@ -80,6 +82,27 @@ public sealed record TurnEnvelope(string Reply, bool MoodSet, string? Mood, bool
             result.Add(new MemoryCandidate(content, kind, importance));
         }
         return result.Count > 0 ? result : null;
+    }
+
+    /// <summary>Lenient: strings trimmed, empty / duplicate ones skipped; non-integer ids skipped.</summary>
+    private static TraitChanges? ParseTraits(JsonElement root)
+    {
+        if (!root.TryGetProperty("traits", out var t) || t.ValueKind != JsonValueKind.Object) return null;
+        var add = new List<string>();
+        if (t.TryGetProperty("add", out var a) && a.ValueKind == JsonValueKind.Array)
+            foreach (var el in a.EnumerateArray())
+            {
+                if (el.ValueKind != JsonValueKind.String) continue;
+                var text = el.GetString()?.Trim();
+                if (string.IsNullOrEmpty(text) || add.Contains(text, StringComparer.OrdinalIgnoreCase)) continue;
+                add.Add(text);
+            }
+        var retire = new List<int>();
+        if (t.TryGetProperty("retire", out var r) && r.ValueKind == JsonValueKind.Array)
+            foreach (var el in r.EnumerateArray())
+                if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var id) && !retire.Contains(id))
+                    retire.Add(id);
+        return add.Count + retire.Count > 0 ? new TraitChanges(add, retire) : null;
     }
 
     private static string StripFence(string raw)

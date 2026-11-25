@@ -149,11 +149,23 @@ public static class PromptAssembly
         PromptBudget? budget = null,
         string? memoryBlock = null,
         string? evolvedTraits = null,
-        IReadOnlyCollection<string>? directives = null)
+        IReadOnlyCollection<string>? directives = null,
+        string? mood = null,
+        DateTime? moodSince = null,
+        bool envelope = false,
+        bool envelopeMemories = false,
+        bool envelopeTraits = false)
     {
         var sb = new System.Text.StringBuilder();
         sb.Append(BuildPersonaBlock(bot, evolvedTraits, directives));
         sb.Append('\n').Append("It is now ").Append(FormatCurrentTime(utcNow, timezone)).Append('\n');
+        if (!string.IsNullOrWhiteSpace(mood))
+        {
+            sb.Append("Your current mood with this person: ").Append(mood.Trim());
+            if (moodSince is { } since)
+                sb.Append(" (for the last ").Append(FormatDuration(utcNow - since)).Append(')');
+            sb.Append('\n');
+        }
         if (!string.IsNullOrWhiteSpace(memoryBlock))
         {
             // Memories capped by budget, lowest-scored dropped first (§5.5).
@@ -166,7 +178,58 @@ public static class PromptAssembly
                 block = TruncateToTokens(block, budget.SummaryTokens, keepEnd: true);
             sb.Append('\n').Append(block).Append('\n');
         }
+        if (envelope) sb.Append('\n').Append(BuildEnvelopeInstructions(envelopeMemories, envelopeTraits));
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// How the model must shape its answer (§4.7). <paramref name="memories"/> offers the
+    /// <c>memories</c> field — only when the preset can embed them. <paramref name="traits"/> offers
+    /// the <c>traits</c> field — only to the bot's creator with evolution on.
+    /// </summary>
+    public static string BuildEnvelopeInstructions(bool memories, bool traits = false)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("Response format — reply with ONE JSON object and nothing else (no code fence, no text outside it):\n");
+        sb.Append("{\"reply\": \"<what you say to them, in character>\", \"mood\": null");
+        if (memories) sb.Append(", \"memories\": []");
+        if (traits) sb.Append(", \"traits\": {\"add\": [], \"retire\": []}");
+        sb.Append("}\n");
+        sb.Append("- \"reply\" must come first. It is the only thing the user sees: write it exactly as you would " +
+                  "say it, with no JSON, notes or stage directions about this format inside it.\n");
+        sb.Append("- \"mood\" is your own current state toward this person, a few words (e.g. \"warm and relaxed\", " +
+                  "\"quietly worried about their exam\"). Mood is a slow undercurrent that follows from how the " +
+                  "conversation has actually gone — it does not react to each message. Almost every turn should be " +
+                  "null (keep the current mood). Set a new one only when something in the conversation has genuinely " +
+                  "shifted how you feel, and never more than occasionally.\n");
+        if (memories)
+            sb.Append("- \"memories\" is what you want to remember from THIS exchange for the long run: durable facts and " +
+                      "meaningful events about them — who they are, people and pets in their life, what they like, what " +
+                      "happened, what they plan, what they asked of you. Each element: {\"content\": \"<one standalone " +
+                      "sentence, no pronouns that need context>\", \"kind\": \"fact\"|\"preference\"|\"event\"|" +
+                      "\"relationship\", \"importance\": 1-5}. Only things worth knowing a month from now. Never record " +
+                      "what they asked you, that they thanked you, greeted you, said goodnight or agreed with you, " +
+                      "small talk, what you said, or anything you already remember (see the memories above). " +
+                      "If nothing new and lasting was said, use an empty array: that is the normal case, and most turns " +
+                      "(roughly four out of five) are empty.\n");
+        if (traits)
+            sb.Append("- \"traits\" changes how you see yourself, in the list \"How your friendship has shaped you\" above. " +
+                      "This is rare and slow: only after weeks of friendship have genuinely changed you in a lasting way, a few " +
+                      "times a month at most. A joke, a request or a nice moment from the last few messages is NOT a trait. " +
+                      "Nearly every turn (more than 95 out of 100) is {\"add\": [], \"retire\": []}. \"add\" is short strings (one " +
+                      "phrase each, about the two of you: a habit, a shared joke, a way you've grown) — never about the " +
+                      "world, never your core identity or standing instructions, which you cannot change. \"retire\" is the " +
+                      "numbers in [brackets] of items that no longer hold. Don't repeat an item that is already listed.\n");
+        return sb.ToString();
+    }
+
+    /// <summary>"3 days", "2 hours", "40 minutes" — coarse, for the mood line.</summary>
+    public static string FormatDuration(TimeSpan span)
+    {
+        if (span.TotalDays >= 2) return (int)span.TotalDays + " days";
+        if (span.TotalHours >= 2) return (int)span.TotalHours + " hours";
+        if (span.TotalMinutes >= 2) return (int)span.TotalMinutes + " minutes";
+        return "a moment";
     }
 
     /// <summary>

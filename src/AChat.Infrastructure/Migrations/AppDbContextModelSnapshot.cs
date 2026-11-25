@@ -18,7 +18,7 @@ namespace AChat.Infrastructure.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.11")
+                .HasAnnotation("ProductVersion", "10.0.15")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "vector");
@@ -89,9 +89,6 @@ namespace AChat.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
                         .HasDefaultValue(true);
-
-                    b.Property<int?>("EvolutionUpToMessageId")
-                        .HasColumnType("integer");
 
                     b.Property<string>("Greeting")
                         .HasMaxLength(2000)
@@ -207,6 +204,40 @@ namespace AChat.Infrastructure.Migrations
                     b.ToTable("BotDirectives", (string)null);
                 });
 
+            modelBuilder.Entity("AChat.Core.Models.BotTrait", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("BotId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("RetiredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("RetiredByMessageId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("SourceMessageId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BotId", "RetiredAt");
+
+                    b.ToTable("BotTraits", (string)null);
+                });
+
             modelBuilder.Entity("AChat.Core.Models.Conversation", b =>
                 {
                     b.Property<int>("Id")
@@ -221,13 +252,20 @@ namespace AChat.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<int>("ExtractionUpToMessageId")
+                    b.Property<DateTime?>("LastMessageAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Mood")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime?>("MoodChangedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("MoodChangedAtMessageId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
                         .HasDefaultValue(0);
-
-                    b.Property<DateTime?>("LastMessageAt")
-                        .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("UserId")
                         .HasColumnType("integer");
@@ -320,6 +358,9 @@ namespace AChat.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("text");
 
                     b.Property<int?>("PresetId")
                         .HasColumnType("integer");
@@ -560,6 +601,9 @@ namespace AChat.Infrastructure.Migrations
                     b.Property<int?>("InteractionId")
                         .HasColumnType("integer");
 
+                    b.Property<string>("Snapshot")
+                        .HasColumnType("text");
+
                     b.Property<int>("Source")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
@@ -754,6 +798,17 @@ namespace AChat.Infrastructure.Migrations
                 });
 
             modelBuilder.Entity("AChat.Core.Models.BotDirective", b =>
+                {
+                    b.HasOne("AChat.Core.Models.Bot", "Bot")
+                        .WithMany()
+                        .HasForeignKey("BotId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Bot");
+                });
+
+            modelBuilder.Entity("AChat.Core.Models.BotTrait", b =>
                 {
                     b.HasOne("AChat.Core.Models.Bot", "Bot")
                         .WithMany()

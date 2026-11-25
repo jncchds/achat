@@ -93,9 +93,16 @@ export interface Directive {
 export interface PersonaVersion {
   id: number
   content: string
-  source: 'Initial' | 'Evolution' | 'UserEdited' | 'Revert'
+  source: 'Initial' | 'Evolution' | 'UserEdited' | 'Revert' | 'BotTurn' | 'Consolidation'
   interactionId: number | null
   createdAt: string
+  /** The active trait items at this version. */
+  items: Trait[]
+}
+
+export interface Trait {
+  id: number
+  text: string
 }
 
 export interface Message {
@@ -133,6 +140,8 @@ export interface InteractionDetail extends Omit<Interaction, 'purpose'> {
   reasoning: string | null
   responseContent: string | null
   failureReason: string | null
+  notes: string | null
+  recalledMemoryIds: string | null
 }
 
 export interface Memory {
@@ -383,6 +392,8 @@ export const getBot = (id: number) => http.get<Bot>(`/api/bots/${id}`).then(r =>
 export const createBot = (b: BotInput) => http.post<Bot>('/api/bots', b).then(r => r.data)
 export const updateBot = (id: number, b: BotInput) => http.put<Bot>(`/api/bots/${id}`, b).then(r => r.data)
 export const deleteBot = (id: number) => http.delete(`/api/bots/${id}`)
+export const getMood = (id: number) =>
+  http.get<{ mood: string | null; since: string | null }>(`/api/bots/${id}/mood`).then(r => r.data)
 export const getMessages = (id: number) => http.get<Message[]>(`/api/bots/${id}/messages`).then(r => r.data)
 
 // Directives (§2.4)
@@ -398,8 +409,14 @@ export const deleteDirective = (botId: number, id: number) =>
 // Evolved traits — versioned (§2.4)
 export const listPersonaVersions = (botId: number) =>
   http.get<PersonaVersion[]>(`/api/bots/${botId}/persona/versions`).then(r => r.data)
-export const editPersona = (botId: number, content: string) =>
-  http.put<PersonaVersion>(`/api/bots/${botId}/persona`, { content }).then(r => r.data)
+export const listTraits = (botId: number) =>
+  http.get<Trait[]>(`/api/bots/${botId}/persona/traits`).then(r => r.data)
+export const addTrait = (botId: number, text: string) =>
+  http.post<PersonaVersion>(`/api/bots/${botId}/persona/traits`, { text }).then(r => r.data)
+export const editTrait = (botId: number, traitId: number, text: string) =>
+  http.put<PersonaVersion>(`/api/bots/${botId}/persona/traits/${traitId}`, { text }).then(r => r.data)
+export const retireTrait = (botId: number, traitId: number) =>
+  http.delete<PersonaVersion>(`/api/bots/${botId}/persona/traits/${traitId}`).then(r => r.data)
 export const revertPersona = (botId: number, versionId: number) =>
   http.post<PersonaVersion>(`/api/bots/${botId}/persona/versions/${versionId}/revert`).then(r => r.data)
 

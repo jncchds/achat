@@ -1,17 +1,25 @@
-// Phase 5 verification against the mock LLM (no real model needed).
-// Verifies the pipeline: evolution pass shape (user message present!),
-// persona block ordering (core → evolved → directives), versioning, revert,
-// and the memory pipeline (mock embeddings).
+// Turn-envelope pipeline check against the mock LLM (no real model needed).
+// Verifies, from the mock's request log and the API:
+//   • the chat system block is ordered core → evolved traits → directives
+//   • the envelope instructions are sent (and offer memories + traits to the creator)
+//   • the user's message and a clean reply are what gets stored (no JSON leaks into the chat)
+//   • bot memories from the envelope are stored, recalled in the next prompt, and reported
+//     in chat.completed
+//   • a garbled envelope (here: a plain-text reply) still delivers the reply and has no side effects
 //
-// Prereqs: mockllm.mjs running on 18999; e2e app instance on 5002 with
-// fast evolution triggers (see the run command in the README).
+// Prereqs: mockllm.mjs running on 18999 (MOCK_LOG default); throwaway instance on 5002.
+//   ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase5-mock.mjs
+import fs from 'node:fs'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
 const BASE = process.env.ACHAT_BASE || 'http://localhost:5002'
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 async function api(path, opts = {}) {
   const res = await fetch(BASE + path, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}), ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}) },
+    headers: { 'Content-Type': 'application/json', ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}) },
   })
   const text = await res.text()
   if (!res.ok) throw new Error(`${path} → ${res.status}: ${text.slice(0, 300)}`)
@@ -19,8 +27,6 @@ async function api(path, opts = {}) {
 }
 
 async function chat(token, botId, message) {
-  const { spawn } = await import('child_process')
-  const { fileURLToPath } = await import('node:url')
   const sigtest = fileURLToPath(new URL('./sigtest.mjs', import.meta.url))
   const out = await new Promise(resolve => {
     const p = spawn('node', [sigtest, token, String(botId), message],
@@ -41,118 +47,60 @@ const check = (ok, label, extra = '') => {
   if (!ok) failures++
 }
 
-// ── setup: mock preset + bot ─────────────────────────────────────────────────
-const login = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'admin', password: 'admin' }) })
-const token = login.token
-
-const presets = await api('/api/presets', { token })
-let preset = presets.find(p => p.name === 'Mock')
-if (!preset) {
-  preset = await api('/api/presets', {
-    method: 'POST', token,
-    body: JSON.stringify({
-      name: 'Mock', provider: 'OpenAICompatible',
-      baseEndpoint: 'http://host.docker.internal:18999/v1',
-      generationModel: 'mock-model', utilityModel: 'mock-model-small',
-      embeddingModel: 'mock-embed', temperature: 0.7,
-    }),
-  })
-}
-
-const bots = await api('/api/bots', { token })
-let bot = bots.find(b => b.name === 'MockSage')
-if (!bot) {
-  bot = await api('/api/bots', {
-    method: 'POST', token,
-    body: JSON.stringify({
-      name: 'MockSage', presetId: preset.id,
-      corePersona: 'A thoughtful friend with a dry sense of humour. Values honesty over comfort.',
-      speechStyle: 'Direct, a little wry.',
-    }),
-  })
-}
+// ── setup: mock preset + bot with directives and a core persona ──────────────
+const token = (await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'admin', password: 'admin' }) })).token
+let preset = (await api('/api/presets', { token })).find(p => p.name === 'Mock')
+if (!preset) preset = await api('/api/presets', { method: 'POST', token, body: JSON.stringify({
+  name: 'Mock', provider: 'OpenAICompatible', baseEndpoint: 'http://host.docker.internal:18999/v1',
+  generationModel: 'mock-model', utilityModel: 'mock-model-small', embeddingModel: 'mock-embed', temperature: 0.7 }) })
+const bot = await api('/api/bots', { method: 'POST', token, body: JSON.stringify({
+  name: 'EnvelopeSage', presetId: preset.id,
+  corePersona: 'A thoughtful friend with a dry sense of humour. Values honesty over comfort.',
+  speechStyle: 'Direct, a little wry.' }) })
 console.log('mock bot:', bot.id, bot.name)
+const directive = 'Call me Sam — never "sir" or any title.'
+await api(`/api/bots/${bot.id}/directives`, { method: 'POST', token, body: JSON.stringify({ text: directive }) })
 
-const dirs = []
-for (const text of ['Call me Sam — never "sir" or any title.', 'Be more blunt. Skip the diplomatic padding.']) {
-  const existing = (await api(`/api/bots/${bot.id}/directives`, { token })).find(d => d.text === text)
-  dirs.push(existing || await api(`/api/bots/${bot.id}/directives`, { method: 'POST', token, body: JSON.stringify({ text }) }))
-}
-check(dirs.length === 2, 'directives in place')
+const logPath = process.env.MOCK_LOG || fileURLToPath(new URL('./mock-requests.jsonl', import.meta.url))
+const chatRequests = () => fs.readFileSync(logPath, 'utf8').trim().split('\n').map(l => JSON.parse(l))
+  .filter(l => l.url === '/v1/chat/completions' && (l.messages || []).some(m => m.role === 'system' && m.head.includes('You are EnvelopeSage')))
 
-// ── conversation (mock replies are instant) ─────────────────────────────────
-const turns = [
-  "The flat's heating gave up again. Third time this winter.",
-  "Hissing like a snake. I've named it Steve.",
-  "You're the only one I tell about Steve.",
-  "Ours. Ours and hissing.",
-  "Go to bed, Sam — Steve can wait.",
-  "Last night Steve woke me again. I am done with this heating."
-]
-for (const t of turns) {
-  await chat(token, bot.id, t)
-  await sleep(400)
-}
+try {
+  // ── 1. a trait + a memory in one envelope ──────────────────────────────────
+  const trait = 'jokes about the heating, which they call Steve'
+  const r1 = await chat(token, bot.id, `The flat heating gave up again. I named it Steve. [[trait:${trait}]] [[remember:The user's flat heating is called Steve.]]`)
+  check(!/\{"reply"|"memories"|"traits"/.test(r1.content), 'the stored/streamed reply carries no raw JSON', r1.content.slice(0, 60))
+  check(r1.remembered === 1, 'chat.completed reports one remembered memory', `remembered=${r1.remembered}`)
+  check(r1.traitChanges?.added?.[0] === trait, 'chat.completed reports the added trait')
+  const mems = await api(`/api/memories?botId=${bot.id}`, { token })
+  check(mems.length === 1 && mems[0].source === 'BotRemember', 'one BotRemember memory stored', mems.map(m => m.content).join(' | '))
 
-// ── wait for evolution + extraction ─────────────────────────────────────────
-let versions = [], memories = []
-for (let i = 0; i < 24; i++) {
-  await sleep(5000)
-  versions = (await api(`/api/bots/${bot.id}/persona/versions`, { token })) || []
-  memories = (await api(`/api/memories?botId=${bot.id}`, { token })) || []
-  const evolved = versions.find(v => v.source === 'Evolution' && v.content.trim())
-  if (evolved && memories.length > 0) break
-}
-const evolvedV = versions.find(v => v.source === 'Evolution' && v.content.trim())
-check(!!evolvedV, 'evolution produced a version', evolvedV ? evolvedV.content.slice(0, 60).replace(/\n/g, ' ') : '(none)')
-check(memories.length >= 1, `memories extracted (${memories.length})`, (memories[0] || {}).content?.slice(0, 50))
+  // ── 2. the next prompt: persona block order, memory recall, envelope instructions ──
+  await sleep(500)
+  await chat(token, bot.id, 'How is the heating?')
+  const last = chatRequests().pop()
+  const sys = last.messages.find(m => m.role === 'system').head
+  const iCore = sys.indexOf('thoughtful friend'), iTrait = sys.indexOf(trait), iDir = sys.indexOf(directive)
+  check(iCore >= 0 && iTrait > iCore && iDir > iTrait, 'system block is ordered core → evolved trait → directive', `${iCore} < ${iTrait} < ${iDir}`)
+  check(last.messages.some(m => m.role === 'user'), 'request carries a user message')
+  check(/Response format — reply with ONE JSON object/.test(sys), 'envelope instructions are sent')
+  check(/\"memories\"/.test(sys) && /\"traits\"/.test(sys), 'the creator is offered memories and traits')
+  check(/Steve/.test(sys), 'the remembered fact is in the prompt', 'memory block')
 
-// ── the mock's request log proves the prompt structure ──────────────────────
-const fs = await import('node:fs')
-const { fileURLToPath } = await import('node:url')
-const logPath = fileURLToPath(new URL('./mock-requests.jsonl', import.meta.url))
-const lines = fs.readFileSync(logPath, 'utf8').trim().split('\n').map(l => JSON.parse(l))
-const chatReqs = lines.filter(l => l.url === '/v1/chat/completions' && (l.messages || []).some(m => m.role === 'system' && m.head.includes('You are MockSage')))
-const evoReqs = lines.filter(l => l.url === '/v1/chat/completions' && (l.messages || []).some(m => m.role === 'system' && m.head.includes('evolved-traits')))
+  // ── 3. a garbled envelope never loses the reply, and applies nothing ──────
+  // The mock answers plain text unless a marker is present, i.e. a non-envelope reply.
+  const before = (await api('/api/memories?botId=' + bot.id, { token })).length
+  const r3 = await chat(token, bot.id, 'just chatting, no markers')
+  check(typeof r3.content === 'string' && r3.content.includes('You said'), 'a non-envelope reply is delivered as is', r3.content.slice(0, 60))
+  check((await api('/api/memories?botId=' + bot.id, { token })).length === before, 'and writes no memories')
+  check((await api(`/api/bots/${bot.id}/persona/traits`, { token })).length === 1, 'and changes no traits')
 
-check(chatReqs.length > 0, 'mock saw chat requests')
-if (chatReqs.length > 0) {
-  const last = chatReqs[chatReqs.length - 1]
-  const sys = last.messages.find(m => m.role === 'system')
-  const coreIdx = sys.head.includes('thoughtful friend') ? 0 : -1
-  const hasUser = last.messages.some(m => m.role === 'user')
-  check(coreIdx >= 0, 'chat system block contains core persona')
-  check(hasUser, 'chat request has a user message')
-}
-check(evoReqs.length > 0, 'mock saw the evolution request')
-if (evoReqs.length > 0) {
-  const evo = evoReqs[evoReqs.length - 1]
-  check(evo.messages.some(m => m.role === 'user'), 'evolution request carries a USER message (Qwen3 template fix)')
-  check(evo.messages.some(m => m.role === 'system'), 'evolution request has a system role')
-  const brief = evo.messages.find(m => m.role === 'user')
-  check(!!brief && brief.head.includes('Call me Sam'), 'evolution brief carries the directives as constraints')
+  // ── 4. history shows clean text ───────────────────────────────────────────
+  const msgs = await api(`/api/bots/${bot.id}/messages`, { token })
+  check(!msgs.some(m => /^\s*\{"reply"/.test(m.content)), 'no stored message holds raw envelope JSON')
+} finally {
+  await api(`/api/bots/${bot.id}`, { method: 'DELETE', token }).catch(() => {})
 }
 
-// ── versioning: edit → revert → history ─────────────────────────────────────
-const edited = await api(`/api/bots/${bot.id}/persona`, { method: 'PUT', token, body: JSON.stringify({ content: (evolvedV ? evolvedV.content : '') + ' EDITED' }) })
-check(edited.source === 'UserEdited', 'edit appends a UserEdited version', `v${edited.id}`)
-const after = await api(`/api/bots/${bot.id}/persona/versions`, { token })
-const target = after.find(v => v.source === 'Evolution')
-const reverted = await api(`/api/bots/${bot.id}/persona/versions/${target.id}/revert`, { method: 'POST', token })
-check(reverted.source === 'Revert' && reverted.content === target.content, 'revert appends a Revert version with the target content')
-const final = await api(`/api/bots/${bot.id}/persona/versions`, { token })
-check(final[final.length - 1].source === 'Revert', 'current version is the revert')
-check(final.length >= 4, 'full history (initial → evolution → edit → revert)', final.map(v => v.source).join(' → '))
-
-// ── the bot still answers (mock) ─────────────────────────────────────────────
-const probe = await chat(token, bot.id, 'What is the heating called?')
-check(/Steve/i.test(probe.content) || probe.content.length > 0, 'chat still works after the persona changes', probe.content.slice(0, 80))
-
-// ── cleanup ──────────────────────────────────────────────────────────────────
-await api(`/api/bots/${bot.id}`, { method: 'DELETE', token })
-const p2 = (await api('/api/presets', { token })).find(p => p.id === preset.id)
-if (p2) await api(`/api/presets/${preset.id}`, { method: 'DELETE', token })
-console.log('cleaned up mock bot + preset')
-
-console.log(failures === 0 ? '\nPHASE 5 (mock) E2E: PASS' : `\nPHASE 5 (mock) E2E: FAIL (${failures})`)
+console.log(failures === 0 ? '\nENVELOPE (mock) E2E: PASS' : `\nENVELOPE (mock) E2E: FAIL (${failures})`)
 process.exit(failures === 0 ? 0 : 1)

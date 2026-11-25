@@ -298,61 +298,28 @@ public class MemoryRetrievalTests
     }
 }
 
-public class ExtractionLogicTests
+public class MemoryWriterLogicTests
 {
-    [Fact]
-    public void ParseCandidates_handles_fences_prose_and_bad_elements()
-    {
-        var raw = "Sure! Here is the array:\n```json\n[\n"
-            + "{\"content\": \"User's cat is named Pixel\", \"kind\": \"fact\", \"importance\": 4},\n"
-            + "{\"content\": \"\"},\n"
-            + "{\"kind\": \"event\"},\n"
-            + "42\n"
-            + "]\n```\nHope that helps!";
-
-        var result = ExtractionHandler.ParseCandidates(raw, max: 10);
-        Assert.Single(result);
-        Assert.Equal("User's cat is named Pixel", result[0].Content);
-        Assert.Equal(MemoryKind.Fact, result[0].Kind);
-        Assert.Equal(4, result[0].Importance);
-    }
-
-    [Fact]
-    public void ParseCandidates_clamps_importance_and_respects_max()
-    {
-        var raw = "[{\"content\":\"a\",\"importance\":99},{\"content\":\"b\"},{\"content\":\"c\"}]";
-        var result = ExtractionHandler.ParseCandidates(raw, max: 2);
-        Assert.Equal(2, result.Count);
-        Assert.Equal(5, result[0].Importance); // clamped to 1..5
-    }
-
-    [Fact]
-    public void ParseCandidates_returns_empty_on_garbage()
-    {
-        Assert.Empty(ExtractionHandler.ParseCandidates("no json here", 5));
-        Assert.Empty(ExtractionHandler.ParseCandidates("[{broken", 5));
-    }
-
     [Fact]
     public void Decide_drops_duplicates_and_respects_human_edits()
     {
         // Near-identical → always a duplicate, even over a human edit.
-        Assert.Equal(ExtractionHandler.CandidateAction.Drop,
-            ExtractionHandler.Decide(0.95f, MemorySource.Extraction));
-        Assert.Equal(ExtractionHandler.CandidateAction.Drop,
-            ExtractionHandler.Decide(0.95f, MemorySource.UserEdited));
+        Assert.Equal(MemoryWriter.CandidateAction.Drop,
+            MemoryWriter.Decide(0.95f, MemorySource.BotRemember));
+        Assert.Equal(MemoryWriter.CandidateAction.Drop,
+            MemoryWriter.Decide(0.95f, MemorySource.UserEdited));
 
         // Similar but not identical → supersede…
-        Assert.Equal(ExtractionHandler.CandidateAction.Supersede,
-            ExtractionHandler.Decide(0.90f, MemorySource.Extraction));
+        Assert.Equal(MemoryWriter.CandidateAction.Supersede,
+            MemoryWriter.Decide(0.90f, MemorySource.BotRemember));
 
         // …unless a human edited the existing row (§5.6).
-        Assert.Equal(ExtractionHandler.CandidateAction.Drop,
-            ExtractionHandler.Decide(0.90f, MemorySource.UserEdited));
+        Assert.Equal(MemoryWriter.CandidateAction.Drop,
+            MemoryWriter.Decide(0.90f, MemorySource.UserEdited));
 
         // Unrelated → fresh insert.
-        Assert.Equal(ExtractionHandler.CandidateAction.Insert,
-            ExtractionHandler.Decide(0.50f, MemorySource.Extraction));
+        Assert.Equal(MemoryWriter.CandidateAction.Insert,
+            MemoryWriter.Decide(0.50f, MemorySource.BotRemember));
     }
 }
 
@@ -439,37 +406,27 @@ public class EvolutionTriggerTests
     private static readonly DateTime Cutoff = Now.AddHours(-12); // 12h cooldown
 
     [Fact]
-    public void Triggers_when_enough_new_messages_and_no_versions_yet()
+    public void Arms_when_over_the_threshold_and_no_versions_yet()
     {
-        Assert.True(EvolutionHandler.ShouldEvolve(50, null, 40, Cutoff));
+        Assert.True(PersonaTraits.ShouldConsolidate(13, 12, null, Cutoff));
     }
 
     [Fact]
-    public void Does_not_trigger_below_the_message_threshold()
+    public void Does_not_arm_at_or_below_the_threshold()
     {
-        Assert.False(EvolutionHandler.ShouldEvolve(10, null, 40, Cutoff));
+        Assert.False(PersonaTraits.ShouldConsolidate(12, 12, null, Cutoff));
     }
 
     [Fact]
-    public void Does_not_trigger_during_the_cooldown()
+    public void Does_not_arm_during_the_cooldown_of_any_source()
     {
-        var recent = Now.AddMinutes(-30); // a version written half an hour ago
-        Assert.False(EvolutionHandler.ShouldEvolve(50, recent, 40, Cutoff));
+        // A fresh human edit, revert or bot turn all hold consolidation back.
+        Assert.False(PersonaTraits.ShouldConsolidate(20, 12, Now.AddMinutes(-30), Cutoff));
     }
 
     [Fact]
-    public void Triggers_once_the_cooldown_has_elapsed()
+    public void Arms_once_the_cooldown_has_elapsed()
     {
-        var old = Now.AddHours(-24);
-        Assert.True(EvolutionHandler.ShouldEvolve(50, old, 40, Cutoff));
-    }
-
-    [Fact]
-    public void A_human_edit_or_revert_resets_the_cooldown()
-    {
-        // The newest version is a fresh human edit — the correction must not be
-        // overwritten by an immediate evolution pass.
-        var freshEdit = Now.AddMinutes(-5);
-        Assert.False(EvolutionHandler.ShouldEvolve(50, freshEdit, 40, Cutoff));
+        Assert.True(PersonaTraits.ShouldConsolidate(20, 12, Now.AddHours(-24), Cutoff));
     }
 }

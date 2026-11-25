@@ -21,11 +21,17 @@ public class Conversation
     public DateTime? LastMessageAt { get; set; }
 
     /// <summary>
-    /// Watermark for the memory-extraction worker (§5.3): messages with Id above
-    /// this have not been read by extraction yet. The worker advances it after a
-    /// successful pass; a failed pass leaves it untouched so the same tail retries.
+    /// The bot's current mood toward this person (§4.7) — conversation state, set by the
+    /// bot in its turn envelope. A slow-moving undercurrent: changes are damped by
+    /// <c>Turn:MoodMinTurns</c> / <c>Turn:MoodMinMinutes</c>. Null = none yet.
     /// </summary>
-    public int ExtractionUpToMessageId { get; set; }
+    public string? Mood { get; set; }
+
+    /// <summary>When <see cref="Mood"/> last changed.</summary>
+    public DateTime? MoodChangedAt { get; set; }
+
+    /// <summary>Id of the message that was newest when the mood last changed (turn counting).</summary>
+    public int MoodChangedAtMessageId { get; set; }
 
     public Bot Bot { get; set; } = null!;
     public User User { get; set; } = null!;

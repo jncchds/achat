@@ -20,6 +20,7 @@ public class AppDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<Bot> Bots => Set<Bot>();
     public DbSet<BotDirective> BotDirectives => Set<BotDirective>();
     public DbSet<PersonaVersion> PersonaVersions => Set<PersonaVersion>();
+    public DbSet<BotTrait> BotTraits => Set<BotTrait>();
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<Memory> Memories => Set<Memory>();
@@ -105,13 +106,23 @@ public class AppDbContext : DbContext, IDataProtectionKeyContext
             v.HasOne(x => x.Bot).WithMany().HasForeignKey(x => x.BotId).OnDelete(DeleteBehavior.Cascade);
         });
 
+        // ── BotTrait: items of the evolved layer (§2.4, §4.7) ─────────────────
+        modelBuilder.Entity<BotTrait>(t =>
+        {
+            t.ToTable("BotTraits");
+            t.HasIndex(x => new { x.BotId, x.RetiredAt });
+            t.Property(x => x.Text).IsRequired();
+            t.HasOne(x => x.Bot).WithMany().HasForeignKey(x => x.BotId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         // ── Conversation: one continuous timeline per (BotId, UserId) (§2.3) ──
         modelBuilder.Entity<Conversation>(c =>
         {
             c.ToTable("Conversations");
             c.HasIndex(x => new { x.BotId, x.UserId }).IsUnique();
             c.Property(x => x.LastMessageAt);
-            c.Property(x => x.ExtractionUpToMessageId).HasDefaultValue(0);
+            c.Property(x => x.Mood).HasMaxLength(200);
+            c.Property(x => x.MoodChangedAtMessageId).HasDefaultValue(0);
             c.HasOne(x => x.Bot).WithMany().HasForeignKey(x => x.BotId).OnDelete(DeleteBehavior.Cascade);
             c.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });

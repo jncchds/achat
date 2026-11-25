@@ -5,6 +5,7 @@ namespace AChat.Core.Models;
 /// </summary>
 public enum WorkKind
 {
+    /// <summary>Retired (§4.7): the turn envelope records memories. Kept so old rows still map.</summary>
     Extraction = 0,
     Evolution = 1,
     Summary = 2,

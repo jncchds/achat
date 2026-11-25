@@ -3,14 +3,16 @@
 // Endpoints: /v1/models, /v1/chat/completions (SSE + JSON), /v1/embeddings
 //
 // Purpose-aware replies (inspected via the system message):
-//   • evolution requests  → a fixed evolved-traits document
-//   • extraction requests → a fixed JSON array of memory candidates
+//   • consolidation requests → a fixed JSON array of merged trait strings
+//   • chat turns whose last user message carries [[trait:TEXT]], [[retire:ID]] and/or
+//     [[remember:TEXT]] → a turn envelope JSON that adds / retires that trait or
+//     remembers that text (§4.7)
 //   • summary requests    → a fixed summary sentence
 //   • anything else (chat)→ an echo-style reply
 //
 // Every request is appended to a JSONL log (MOCK_LOG path, default
 // ./mock-requests.jsonl) so E2E scripts can assert the prompt structure —
-// e.g. that the evolution request carries a user message (Qwen3's template
+// e.g. that the consolidation request carries a user message (Qwen3's template
 // rejects system-only requests) and that the persona block is ordered
 // core → evolved → directives.
 //
@@ -23,13 +25,9 @@ import { fileURLToPath } from 'node:url'
 const PORT = parseInt(process.argv[2] || '18999', 10)
 const LOG_PATH = process.env.MOCK_LOG || fileURLToPath(new URL('./mock-requests.jsonl', import.meta.url))
 
-const EVOLVED_DOC = 'You two share a running joke about the flat heating, which you call Steve. ' +
-  'The tone has settled into brisk, good-humoured banter; Sam likes when you name the problem first ' +
-  'and the fix second. You have grown to be the one Sam tells things to before anyone else.'
-
-const EXTRACTION_JSON = JSON.stringify([
-  { content: 'The user calls the flat heating unit Steve.', kind: 'fact', importance: 3 },
-  { content: 'The user prefers the problem named before the fix.', kind: 'preference', importance: 2 },
+const CONSOLIDATED = JSON.stringify([
+  'You two share a running joke about the flat heating, which you call Steve.',
+  'The tone has settled into brisk, good-humoured banter.',
 ])
 
 const SUMMARY_TEXT = 'Sam has been dealing with a broken flat heating (which they call Steve) and ' +
@@ -37,8 +35,7 @@ const SUMMARY_TEXT = 'Sam has been dealing with a broken flat heating (which the
 
 function classify(messages) {
   const system = (messages.find(m => m.role === 'system')?.content || '').slice(0, 400).toLowerCase()
-  if (system.includes('evolved-traits')) return 'evolution'
-  if (system.includes('extract durable memories')) return 'extraction'
+  if (system.includes('list of traits')) return 'evolution'
   if (system.includes('rolling summary') || system.includes('running summary')) return 'summary'
   return 'chat'
 }
@@ -94,12 +91,17 @@ const server = http.createServer((req, res) => {
     if (req.url === '/v1/chat/completions') {
       const kind = classify(parsed.messages || [])
       let reply
-      if (kind === 'evolution') reply = EVOLVED_DOC
-      else if (kind === 'extraction') reply = EXTRACTION_JSON
+      if (kind === 'evolution') reply = CONSOLIDATED
       else if (kind === 'summary') reply = SUMMARY_TEXT
       else {
         const last = (parsed.messages || []).slice(-1)[0]
-        reply = `[mock:${kind}] You said: ${(last?.content || '').slice(0, 120)}`
+        const text = last?.content || ''
+        const adds = [...text.matchAll(/\[\[trait:(.+?)\]\]/g)].map(m => m[1])
+        const retires = [...text.matchAll(/\[\[retire:(\d+)\]\]/g)].map(m => parseInt(m[1], 10))
+        const remembers = [...text.matchAll(/\[\[remember:(.+?)\]\]/g)].map(m => ({ content: m[1], kind: 'fact', importance: 3 }))
+        reply = adds.length || retires.length || remembers.length
+          ? JSON.stringify({ reply: `[mock:envelope] noted`, mood: null, memories: remembers, traits: { add: adds, retire: retires } })
+          : `[mock:${kind}] You said: ${text.slice(0, 120)}`
       }
 
       if (!parsed.stream) {

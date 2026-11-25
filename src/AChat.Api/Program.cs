@@ -91,13 +91,11 @@ builder.Services.AddScoped<ChatService>();
 // ── Memory retrieval (§5.4) ──────────────────────────────────────────────────
 builder.Services.AddSingleton(MemoryRetriever.FromConfiguration(builder.Configuration));
 
-// ── Durable work pipeline (§12b) — extraction (§5.3), evolution (§2.4),
-//    summarisation (§5.3): producers arm the queue, handlers execute the pass,
+// ── Durable work pipeline (§12b) — evolution (§2.4), summarisation (§5.3)
+//    (memory extraction was replaced by the turn envelope, §4.7): producers arm the queue, handlers execute the pass,
 //    one worker claims and records outcomes (backoff / dead-letter).
-builder.Services.AddScoped<IWorkProducer, ExtractionProducer>();
 builder.Services.AddScoped<IWorkProducer, EvolutionProducer>();
 builder.Services.AddScoped<IWorkProducer, SummaryProducer>();
-builder.Services.AddScoped<IWorkHandler, ExtractionHandler>();
 builder.Services.AddScoped<IWorkHandler, EvolutionHandler>();
 builder.Services.AddScoped<IWorkHandler, SummaryHandler>();
 builder.Services.AddHostedService<WorkQueueService>();

@@ -149,11 +149,21 @@ public static class PromptAssembly
         PromptBudget? budget = null,
         string? memoryBlock = null,
         string? evolvedTraits = null,
-        IReadOnlyCollection<string>? directives = null)
+        IReadOnlyCollection<string>? directives = null,
+        string? mood = null,
+        DateTime? moodSince = null,
+        bool envelope = false)
     {
         var sb = new System.Text.StringBuilder();
         sb.Append(BuildPersonaBlock(bot, evolvedTraits, directives));
         sb.Append('\n').Append("It is now ").Append(FormatCurrentTime(utcNow, timezone)).Append('\n');
+        if (!string.IsNullOrWhiteSpace(mood))
+        {
+            sb.Append("Your current mood with this person: ").Append(mood.Trim());
+            if (moodSince is { } since)
+                sb.Append(" (for the last ").Append(FormatDuration(utcNow - since)).Append(')');
+            sb.Append('\n');
+        }
         if (!string.IsNullOrWhiteSpace(memoryBlock))
         {
             // Memories capped by budget, lowest-scored dropped first (§5.5).
@@ -166,7 +176,29 @@ public static class PromptAssembly
                 block = TruncateToTokens(block, budget.SummaryTokens, keepEnd: true);
             sb.Append('\n').Append(block).Append('\n');
         }
+        if (envelope) sb.Append('\n').Append(EnvelopeInstructions);
         return sb.ToString();
+    }
+
+    /// <summary>How the model must shape its answer (§4.7).</summary>
+    public const string EnvelopeInstructions =
+        "Response format — reply with ONE JSON object and nothing else (no code fence, no text outside it):\n" +
+        "{\"reply\": \"<what you say to them, in character>\", \"mood\": null}\n" +
+        "- \"reply\" must come first. It is the only thing the user sees: write it exactly as you would " +
+        "say it, with no JSON, notes or stage directions about this format inside it.\n" +
+        "- \"mood\" is your own current state toward this person, a few words (e.g. \"warm and relaxed\", " +
+        "\"quietly worried about their exam\"). Mood is a slow undercurrent that follows from how the " +
+        "conversation has actually gone — it does not react to each message. Almost every turn should be " +
+        "null (keep the current mood). Set a new one only when something in the conversation has genuinely " +
+        "shifted how you feel, and never more than occasionally.\n";
+
+    /// <summary>"3 days", "2 hours", "40 minutes" — coarse, for the mood line.</summary>
+    public static string FormatDuration(TimeSpan span)
+    {
+        if (span.TotalDays >= 2) return (int)span.TotalDays + " days";
+        if (span.TotalHours >= 2) return (int)span.TotalHours + " hours";
+        if (span.TotalMinutes >= 2) return (int)span.TotalMinutes + " minutes";
+        return "a moment";
     }
 
     /// <summary>

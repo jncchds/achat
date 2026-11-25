@@ -1038,6 +1038,7 @@ pre.code { background: var(--input-bg); border: 1px solid var(--border); border-
 
 /* ── Chat toolbar + recalled link ──────────────────────────────────── */
 .chat-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 0.25rem 1rem 0.5rem; }
+.chat-mood { font-size: 0.75rem; font-style: italic; color: var(--accent); margin: 0 auto 0 0.75rem; }
 .msg-recalled { display: inline-block; margin-top: 0.35rem; font-size: 0.72rem; color: var(--accent); text-decoration: none; }
 .msg-recalled:hover { text-decoration: underline; }
 

@@ -395,6 +395,23 @@ public class BotsController(AppDbContext db) : ControllerBase
         }).ToList());
     }
 
+    /// <summary>The bot's current mood toward this user (§4.7) — conversation state.</summary>
+    [HttpGet("{id:int}/mood")]
+    public async Task<ActionResult<MoodDto>> Mood(int id)
+    {
+        var bot = await _VisibleBotAsync(id);
+        if (bot is null) return NotFound();
+        var c = await db.Conversations.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.BotId == id && x.UserId == _userId);
+        return Ok(new MoodDto { Mood = c?.Mood, Since = c?.MoodChangedAt });
+    }
+
+    public sealed class MoodDto
+    {
+        public string? Mood { get; set; }
+        public DateTime? Since { get; set; }
+    }
+
     // ── Sharing (§2.5) — owner-only: invite code, member roster, approval queue ──
 
     /// <summary>The owner's share view: invite code, member roster, and the pending queue (§2.5).</summary>

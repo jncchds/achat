@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { HubConnectionBuilder, LogLevel, type HubConnection } from '@microsoft/signalr'
-import { apiError, getBot, getMessages, getToken, type Bot, type Message } from '../api'
+import { apiError, getBot, getMessages, getMood, getToken, type Bot, type Message } from '../api'
 import Avatar from '../components/Avatar'
 import { useAuth } from '../hooks/useAuth'
 
@@ -39,6 +39,7 @@ export default function Chat() {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [loadError, setLoadError] = useState('')
+  const [mood, setMood] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const connRef = useRef<HubConnection | null>(null)
   const streamingKey = useRef<string | null>(null)
@@ -51,6 +52,7 @@ export default function Chat() {
       const b = await getBot(id)
       if (!live) return
       setBot(b)
+      getMood(id).then(m => { if (live) setMood(m.mood) }).catch(() => {})
       const ms = await getMessages(id)
       if (!live) return
       // Greeting: if the timeline is empty and the bot has a greeting, show it.
@@ -92,8 +94,9 @@ export default function Chat() {
         })
       }).catch(() => {})
 
-    conn.on('chat.completed', (m: { recalledMemoryIds?: number[] }) => {
+    conn.on('chat.completed', (m: { recalledMemoryIds?: number[]; mood?: string | null }) => {
       const recalled = m?.recalledMemoryIds ?? []
+      if (m && 'mood' in m) setMood(m.mood ?? null)
       patchStreaming(d => ({ ...d, streaming: false, complete: true, recalled }))
       streamingKey.current = null
       setBusy(false)
@@ -232,6 +235,7 @@ export default function Chat() {
     <div className="chat-wrap">
       <div className="chat-toolbar">
         <span className="hint">{bot.name}</span>
+        {mood && <span className="chat-mood" title="How they feel right now">{mood}</span>}
         <Link to={`/bots/${id}/memories`} className="btn-ghost btn-sm">🧠 Memories</Link>
         <Link to={`/bots/${id}/settings`} className="btn-ghost btn-sm">⚙️ Personality</Link>
       </div>

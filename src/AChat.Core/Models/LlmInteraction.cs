@@ -63,6 +63,12 @@ public class LlmInteraction
     /// </summary>
     public string? RecalledMemoryIds { get; set; }
 
+    /// <summary>
+    /// Non-fatal observations about the call (§4.7): e.g. "EnvelopeInvalid", a mood
+    /// change that was damped. Null when there is nothing to note.
+    /// </summary>
+    public string? Notes { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public Bot? Bot { get; set; }

@@ -57,6 +57,7 @@ with the `ACHAT_` prefix and .NET nested-key convention (`ACHAT_Section__Key`):
 | `Evolution__CooldownHours` | `12` | Cooldown between rewrites — a human edit or revert also resets it |
 | `Evolution__MaxTailMessages` | `60` | Conversation tail sent to the evolver |
 | `Evolution__MaxTokens` | `512` | Output cap for the evolution call |
+| `Turn__MoodMinTurns` / `Turn__MoodMinMinutes` | `6 / 30` | A bot's mood may change only after this many user turns **and** minutes since its last change (§4.7) |
 | `Retention__InteractionDays` | `90` | Prune audit-log interactions older than this many days; `0` = keep forever (§4.4) |
 | `Retention__IntervalHours` | `6` | How often the retention worker runs |
 | `Work__TickSeconds` | `5` | How often the work queue arms due work and claims items (§12b) |

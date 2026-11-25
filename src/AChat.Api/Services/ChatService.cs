@@ -22,6 +22,8 @@ public sealed class ChatService
     private readonly int _historyTurns;
     private readonly TimeSpan _gapThreshold;
     private readonly PromptBudget _budget;
+    private readonly int _moodMinTurns;
+    private readonly int _moodMinMinutes;
 
     public sealed record ChatRunResult(
         int UserMessageId,
@@ -33,7 +35,9 @@ public sealed class ChatService
         int? PromptTokens,
         int? CompletionTokens,
         int? TotalTokens,
-        IReadOnlyList<int> RecalledMemoryIds);
+        IReadOnlyList<int> RecalledMemoryIds,
+        string? Mood = null,
+        bool MoodChanged = false);
 
     public ChatService(AppDbContext db, ILlmProviderFactory factory, IApiKeyProtector keys,
         MemoryRetriever memories, IConfiguration config, ILogger<ChatService> log)
@@ -47,6 +51,37 @@ public sealed class ChatService
         _historyTurns = config.GetValue("Chat:HistoryTurns", 20);
         _gapThreshold = TimeSpan.FromMinutes(config.GetValue("Chat:GapThresholdMinutes", 360));
         _budget = PromptBudget.FromConfiguration(config);
+        _moodMinTurns = config.GetValue("Turn:MoodMinTurns", 6);
+        _moodMinMinutes = config.GetValue("Turn:MoodMinMinutes", 30);
+    }
+
+    /// <summary>
+    /// Applies the envelope's mood (§4.7), damped so it cannot swing: a change is
+    /// accepted only when there is no mood yet, or at least <c>Turn:MoodMinTurns</c>
+    /// user turns and <c>Turn:MoodMinMinutes</c> minutes have passed since the last one.
+    /// Dropped changes are noted on the interaction. Saved with the turn.
+    /// </summary>
+    private async Task<bool> ApplyMoodAsync(
+        Conversation conversation, string newMood, int userMessageId, List<string> notes)
+    {
+        var current = conversation.Mood ?? "";
+        if (string.Equals(current, newMood, StringComparison.OrdinalIgnoreCase)) return false;
+        if (current.Length > 0 && conversation.MoodChangedAt is { } changedAt)
+        {
+            var turns = await _db.Messages.CountAsync(m =>
+                m.ConversationId == conversation.Id && m.Role == MessageRole.User
+                && m.Id > conversation.MoodChangedAtMessageId && m.Id <= userMessageId);
+            var minutes = (DateTime.UtcNow - changedAt).TotalMinutes;
+            if (turns < _moodMinTurns || minutes < _moodMinMinutes)
+            {
+                notes.Add($"MoodDamped: '{newMood}' (held '{current}' for {turns} turns / {(int)minutes} min)");
+                return false;
+            }
+        }
+        conversation.Mood = newMood.Length == 0 ? null : newMood;
+        conversation.MoodChangedAt = DateTime.UtcNow;
+        conversation.MoodChangedAtMessageId = userMessageId;
+        return true;
     }
 
     public async Task<ChatRunResult> RunAsync(
@@ -326,7 +361,8 @@ public sealed class ChatService
             : null;
         var systemBlock = PromptAssembly.BuildSystemBlock(
             bot, user?.Timezone, now, summary, _budget, memoryBlock,
-            evolvedTraits, directives);
+            evolvedTraits, directives,
+            conversation.Mood, conversation.MoodChangedAt, envelope: true);
 
         // Recent history: last N turns verbatim, with gap markers where the silence
         // was long enough to be noticed (§5.9.2).
@@ -367,6 +403,7 @@ public sealed class ChatService
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var contentBuilder = new System.Text.StringBuilder();
+        var streamer = new ReplyStreamer(); // §4.7: relays only the envelope's "reply" text
         var reasoningBuilder = new System.Text.StringBuilder();
         string? finishReason = null;
         int? promptTokens = null, completionTokens = null, totalTokens = null;
@@ -381,7 +418,8 @@ public sealed class ChatService
                 if (chunk.Content is not null)
                 {
                     contentBuilder.Append(chunk.Content);
-                    await SafeRelay(() => onContentDelta(chunk.Content));
+                    var replyDelta = streamer.Feed(chunk.Content);
+                    if (replyDelta.Length > 0) await SafeRelay(() => onContentDelta(replyDelta));
                 }
                 if (chunk.Reasoning is not null)
                 {
@@ -428,14 +466,28 @@ public sealed class ChatService
 
         // ── Persist the assistant turn (partial on cancel, per §4.2) ────────────
         int? assistantMessageId = null;
-        var fullContent = contentBuilder.ToString();
-        if (fullContent.Length > 0)
+        var fullContent = contentBuilder.ToString(); // raw model output (the envelope) — logged as-is
+        var completed = !canceled && !failed;
+        // §4.7: the stored / shown reply is the envelope's "reply" only. A partial (stop /
+        // failure) keeps whatever reply text had streamed; a garbled envelope never loses
+        // the turn, it just applies no side effects.
+        var envelope = completed
+            ? TurnEnvelope.Parse(fullContent, streamer.Reply)
+            : new TurnEnvelope(streamer.IsJson ? streamer.Reply : fullContent, false, null, false);
+        var replyText = envelope.Reply;
+        var notes = new List<string>();
+        if (completed && fullContent.Length > 0 && !envelope.Valid) notes.Add("EnvelopeInvalid");
+        var moodChanged = false;
+        if (completed && envelope.Valid && envelope.MoodSet)
+            moodChanged = await ApplyMoodAsync(conversation, envelope.Mood!, userMessage.Id, notes);
+
+        if (replyText.Length > 0)
         {
             var assistant = new Message
             {
                 Conversation = conversation,
                 Role = MessageRole.Assistant,
-                Content = fullContent,
+                Content = replyText,
                 Reasoning = reasoningBuilder.Length > 0 ? reasoningBuilder.ToString() : null,
                 IsComplete = !canceled && !failed,
                 CreatedAt = DateTime.UtcNow,
@@ -474,6 +526,7 @@ public sealed class ChatService
             FinishReason = finishReason,
             Failed = failed || canceled,
             FailureReason = error,
+            Notes = notes.Count > 0 ? string.Join("; ", notes) : null,
             RecalledMemoryIds = recalled.Count > 0
                 ? System.Text.Json.JsonSerializer.Serialize(recalled.Select(m => m.Memory.Id).ToArray())
                 : null,
@@ -499,14 +552,16 @@ public sealed class ChatService
         return new ChatRunResult(
             userMessage.Id,
             assistantMessageId,
-            fullContent,
+            replyText,
             canceled,
             failed,
             error,
             promptTokens,
             completionTokens,
             totalTokens,
-            recalled.Select(m => m.Memory.Id).ToArray());
+            recalled.Select(m => m.Memory.Id).ToArray(),
+            conversation.Mood,
+            moodChanged);
     }
 
     /// <summary>History budget: keep the newest messages, drop oldest first (§5.5).</summary>

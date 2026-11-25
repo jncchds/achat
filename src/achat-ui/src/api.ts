@@ -383,6 +383,8 @@ export const getBot = (id: number) => http.get<Bot>(`/api/bots/${id}`).then(r =>
 export const createBot = (b: BotInput) => http.post<Bot>('/api/bots', b).then(r => r.data)
 export const updateBot = (id: number, b: BotInput) => http.put<Bot>(`/api/bots/${id}`, b).then(r => r.data)
 export const deleteBot = (id: number) => http.delete(`/api/bots/${id}`)
+export const getMood = (id: number) =>
+  http.get<{ mood: string | null; since: string | null }>(`/api/bots/${id}/mood`).then(r => r.data)
 export const getMessages = (id: number) => http.get<Message[]>(`/api/bots/${id}/messages`).then(r => r.data)
 
 // Directives (§2.4)

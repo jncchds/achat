@@ -17,7 +17,7 @@ namespace AChat.Api.Hubs;
 ///   chat.started   { botId, messageId }
 ///   chat.delta     { delta }
 ///   chat.reasoning { delta }
-///   chat.completed { assistantMessageId, content, complete, promptTokens, completionTokens, totalTokens, recalledMemoryIds }
+///   chat.completed { assistantMessageId, content, complete, promptTokens, completionTokens, totalTokens, recalledMemoryIds, mood, moodChanged }
 ///   chat.stopped   {}                          // Stop pressed; the partial is persisted
 ///   chat.failed    { message }
 /// </summary>
@@ -200,6 +200,8 @@ public class ChatHub(IServiceScopeFactory scopes) : Hub
                         completionTokens = result.CompletionTokens,
                         totalTokens = result.TotalTokens,
                         recalledMemoryIds = result.RecalledMemoryIds,
+                        mood = result.Mood,
+                        moodChanged = result.MoodChanged,
                     });
                 }
             }

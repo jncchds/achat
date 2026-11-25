@@ -18,7 +18,7 @@ namespace AChat.Infrastructure.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.11")
+                .HasAnnotation("ProductVersion", "10.0.15")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "vector");
@@ -229,6 +229,18 @@ namespace AChat.Infrastructure.Migrations
                     b.Property<DateTime?>("LastMessageAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("Mood")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime?>("MoodChangedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("MoodChangedAtMessageId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
                     b.Property<int>("UserId")
                         .HasColumnType("integer");
 
@@ -320,6 +332,9 @@ namespace AChat.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("text");
 
                     b.Property<int?>("PresetId")
                         .HasColumnType("integer");

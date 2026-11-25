@@ -73,8 +73,8 @@ export default function BotMemories() {
       <div className="page-header">
         <h2>What your friend remembers</h2>
         <span className="hint">
-          Recorded automatically from your conversations (§5.3). You can edit, pin, or forget
-          any of them — a human correction is never silently overwritten by extraction (§5.6).
+          Recorded by your friend as you talk (§5.3). You can edit, pin, or forget
+          any of them — a human correction is never silently overwritten by your friend (§5.6).
         </span>
         <div className="row" style={{ marginTop: '0.5rem' }}>
           <Link className="btn-ghost btn-sm" to={`/bots/${bot}`}>← Back to chat</Link>

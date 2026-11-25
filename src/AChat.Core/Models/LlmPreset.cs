@@ -33,7 +33,7 @@ public class LlmPreset
     public string GenerationModel { get; set; } = "";
 
     /// <summary>
-    /// A second generation model for background chores (extraction, summarisation,
+    /// A second generation model for background chores (summarisation, consolidation,
     /// persona evolution). Defaults to <see cref="GenerationModel"/> when blank (§3).
     /// </summary>
     public string? UtilityModel { get; set; }

@@ -1,5 +1,29 @@
 # Release notes
 
+## Unreleased
+
+- **One structured reply per turn.** Each reply now comes back as a small JSON
+  envelope: the reply itself, the bot's **mood**, anything it wants to
+  **remember**, and — in its creator's conversation — changes to its own
+  **traits**. A reply that isn't valid JSON is still shown as plain text and
+  changes nothing.
+- **Mood.** Each bot has a mood toward each person, carried into the next turns.
+  It is damped: it can change only after several turns and some time have passed.
+- **Bot memories.** The bot writes its own memories as it talks (deduplicated and
+  recalled as before). The separate background memory-extraction pass is gone;
+  existing memories are untouched.
+- **Traits as a list.** The evolved layer of a persona is now a list of short
+  items the bot adds and retires itself, with limits (a few changes a day, a cap
+  on items and length), a cooldown after you edit it, a version history with
+  diffs, and revert. A slow consolidation pass merges the list when it grows
+  long. Core persona and standing directives can never be changed by the bot.
+  An existing prose persona is converted to one item on first read.
+- **Removed.** The prose evolution rewrite, `PUT /persona`, and the
+  extraction/evolution watermark columns (a migration drops them), plus the
+  `Extraction__*` and `Evolution__MinNewMessages`/`MaxTailMessages` settings.
+  New settings: `Turn__*` (see the README configuration table);
+  `Evolution__MaxTokens` now defaults to 1024.
+
 ## v0.1.1 — 2026-08-24
 
 - **Replies survive you leaving the page.** A chat run now executes on the

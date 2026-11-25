@@ -63,6 +63,7 @@ await api('/api/access/request', { method: 'POST', token: friend, body: JSON.str
 const pending = (await api(`/api/bots/${bot.id}/share`, { token: owner })).requests || []
 for (const r of pending) await api(`/api/bots/${bot.id}/share/requests/${r.id}/approve`, { method: 'POST', token: owner })
 
+const offersTraits = b => /(\\+u0022|\\*")traits(\\+u0022|\\*")/.test(b)
 const versions = async () => await api(`/api/bots/${bot.id}/persona/versions`, { token: owner })
 const traits = async () => await api(`/api/bots/${bot.id}/persona/traits`, { token: owner })
 
@@ -80,7 +81,7 @@ try {
   const latest = (await api('/api/interactions?take=5', { token: owner })).find(x => x.purpose === 'Chat')
   const body = (await api(`/api/interactions/${latest.id}`, { token: owner })).requestBody
   check(body.includes(`[${t[0].id}] teases them about their cooking`), 'creator prompt shows the trait with its id')
-  check(body.includes('\\"traits\\"'), 'creator prompt offers the traits field')
+  check(offersTraits(body), 'creator prompt offers the traits field')
 
   // ── 3. a second user's identical reply changes nothing ────────────────────
   const r2 = await chat(friend, bot.id, 'I cooked too. [[trait:calls them chef]]')
@@ -88,7 +89,7 @@ try {
   check((await traits()).length === 1, 'second user: nothing added')
   const fb = (await api('/api/interactions?take=5', { token: owner })).find(x => x.purpose === 'Chat')
   const friendBody = (await api(`/api/interactions/${fb.id}`, { token: owner })).requestBody
-  check(!friendBody.includes('\\"traits\\"'), 'second user prompt does not offer the traits field')
+  check(!offersTraits(friendBody), 'second user prompt does not offer the traits field')
 
   // ── 4. human edit → the next bot trait is dropped by the cooldown ─────────
   const edited = await api(`/api/bots/${bot.id}/persona/traits/${t[0].id}`, { method: 'PUT', token: owner, body: JSON.stringify({ text: 'teases them gently about their cooking' }) })

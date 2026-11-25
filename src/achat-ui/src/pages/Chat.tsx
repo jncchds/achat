@@ -160,8 +160,9 @@ export default function Chat() {
   }, [id])
 
   const patchStreaming = (fn: (m: UiMsg) => UiMsg) => {
+    // Read the key now: React runs the updater later, after the handler has cleared it.
+    const key = streamingKey.current
     setMsgs(prev => {
-      const key = streamingKey.current
       if (!key) return prev
       return prev.map(m => m.key === key ? fn(m) : m)
     })

@@ -140,6 +140,8 @@ export interface InteractionDetail extends Omit<Interaction, 'purpose'> {
   reasoning: string | null
   responseContent: string | null
   failureReason: string | null
+  notes: string | null
+  recalledMemoryIds: string | null
 }
 
 export interface Memory {

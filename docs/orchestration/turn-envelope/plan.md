@@ -22,5 +22,5 @@ the evolution pass shrinks to a consolidation step. Summarisation is unchanged.
 | T1 | Envelope + `reply` streaming + tolerant parsing + `mood` end to end | ✅ merged (`bf4ce22`, done before the series started) |
 | T2 | `memories` through the existing pipeline (`MemoryWriter`); extraction worker removed | ✅ merged (`5ef0c57`) |
 | T3 | Trait list, `traits` field, guardrails, creator footer; evolution worker → consolidation | ✅ merged (`35aa642`) |
-| T4 | Cleanup: drop unused watermarks (migration), fix stale e2e scripts and README, bring design up to date — [brief](briefs/task-04.md) | running |
-| T5 | End-to-end check against a real model in Docker, polish, PR description | |
+| T4 | Cleanup: drop unused watermarks (migration), fix stale e2e scripts and README, bring design up to date — [brief](briefs/task-04.md) | ✅ merged |
+| T5 | End-to-end check against a real model in Docker, polish, PR description — [brief](briefs/task-05.md) | running |

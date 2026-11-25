@@ -4,15 +4,15 @@
 //
 // Purpose-aware replies (inspected via the system message):
 //   • consolidation requests → a fixed JSON array of merged trait strings
-//   • chat turns whose last user message carries [[trait:TEXT]] and/or [[retire:ID]]
-//     → a turn envelope JSON that adds / retires that trait (§4.7)
-//   • extraction requests → a fixed JSON array of memory candidates
+//   • chat turns whose last user message carries [[trait:TEXT]], [[retire:ID]] and/or
+//     [[remember:TEXT]] → a turn envelope JSON that adds / retires that trait or
+//     remembers that text (§4.7)
 //   • summary requests    → a fixed summary sentence
 //   • anything else (chat)→ an echo-style reply
 //
 // Every request is appended to a JSONL log (MOCK_LOG path, default
 // ./mock-requests.jsonl) so E2E scripts can assert the prompt structure —
-// e.g. that the evolution request carries a user message (Qwen3's template
+// e.g. that the consolidation request carries a user message (Qwen3's template
 // rejects system-only requests) and that the persona block is ordered
 // core → evolved → directives.
 //
@@ -30,18 +30,12 @@ const CONSOLIDATED = JSON.stringify([
   'The tone has settled into brisk, good-humoured banter.',
 ])
 
-const EXTRACTION_JSON = JSON.stringify([
-  { content: 'The user calls the flat heating unit Steve.', kind: 'fact', importance: 3 },
-  { content: 'The user prefers the problem named before the fix.', kind: 'preference', importance: 2 },
-])
-
 const SUMMARY_TEXT = 'Sam has been dealing with a broken flat heating (which they call Steve) and ' +
   'has settled into a brisk, good-humoured way of talking with the friend.'
 
 function classify(messages) {
   const system = (messages.find(m => m.role === 'system')?.content || '').slice(0, 400).toLowerCase()
   if (system.includes('list of traits')) return 'evolution'
-  if (system.includes('extract durable memories')) return 'extraction'
   if (system.includes('rolling summary') || system.includes('running summary')) return 'summary'
   return 'chat'
 }
@@ -98,15 +92,15 @@ const server = http.createServer((req, res) => {
       const kind = classify(parsed.messages || [])
       let reply
       if (kind === 'evolution') reply = CONSOLIDATED
-      else if (kind === 'extraction') reply = EXTRACTION_JSON
       else if (kind === 'summary') reply = SUMMARY_TEXT
       else {
         const last = (parsed.messages || []).slice(-1)[0]
         const text = last?.content || ''
         const adds = [...text.matchAll(/\[\[trait:(.+?)\]\]/g)].map(m => m[1])
         const retires = [...text.matchAll(/\[\[retire:(\d+)\]\]/g)].map(m => parseInt(m[1], 10))
-        reply = adds.length || retires.length
-          ? JSON.stringify({ reply: `[mock:envelope] noted`, mood: null, traits: { add: adds, retire: retires } })
+        const remembers = [...text.matchAll(/\[\[remember:(.+?)\]\]/g)].map(m => ({ content: m[1], kind: 'fact', importance: 3 }))
+        reply = adds.length || retires.length || remembers.length
+          ? JSON.stringify({ reply: `[mock:envelope] noted`, mood: null, memories: remembers, traits: { add: adds, retire: retires } })
           : `[mock:${kind}] You said: ${text.slice(0, 120)}`
       }
 

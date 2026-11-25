@@ -11,7 +11,7 @@ namespace AChat.Api.Controllers;
 
 /// <summary>
 /// The memory viewer/editor (§5.6) — mandatory, not optional: the only way to answer
-/// "why did my friend say that" and the only remedy when extraction records something
+/// "why did my friend say that" and the only remedy when the bot records something
 /// wrong. Per bot, the user can list, search, edit, pin, and delete their own
 /// memories, plus "forget everything".
 ///
@@ -60,7 +60,7 @@ public class MemoriesController(AppDbContext db, IApiKeyProtector keys, ILlmProv
 
     /// <summary>
     /// Edit a memory. The row is flagged <see cref="MemorySource.UserEdited"/> so
-    /// extraction never silently overwrites a human correction (§5.6).
+    /// the bot never silently overwrites a human correction (§5.6).
     /// </summary>
     [HttpPut("{id:int}")]
     public async Task<ActionResult<MemoryDto>> Update(int id, MemoryUpdateRequest req)

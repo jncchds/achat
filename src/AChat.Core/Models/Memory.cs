@@ -34,7 +34,7 @@ public class Memory
     /// <summary>Dimension of <see cref="Embedding"/> — what any re-embedding path needs (§5.7).</summary>
     public int EmbeddingDimension { get; set; }
 
-    /// <summary>1..5, set by extraction (§5.4).</summary>
+    /// <summary>1..5, set by the bot in its turn envelope (§5.4).</summary>
     public int Importance { get; set; } = 3;
 
     /// <summary>Pinned memories always surface in the prompt, regardless of score (§5.4).</summary>
@@ -46,7 +46,7 @@ public class Memory
     public int? SourceMessageId { get; set; }
 
     /// <summary>
-    /// Set when extraction supersedes this row; the old one is kept inspectable rather
+    /// Set when a newer memory supersedes this row; the old one is kept inspectable rather
     /// than deleted (§5.6).
     /// </summary>
     public int? SupersededByMemoryId { get; set; }

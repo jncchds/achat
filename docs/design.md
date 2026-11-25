@@ -210,75 +210,58 @@ stored as rows (`BotDirectives`), each dated. Toggled-off directives are kept (r
 but not injected. In-conversation capture is **not in v1** — automatic promotion that
 misfires is worse than a form.
 
-**Evolved traits** — answer (c). A background worker maintains a short machine-written
-document describing how the bot has changed: the shared jokes, the shorthand, the tone the
-relationship has settled into.
+**Evolved traits** — answer (c). A short **list of items** describing how the bot has
+changed: the shared jokes, the shorthand, the tone the relationship has settled into. Slow
+by design — personality that shifts hourly is noise, not character.
 
-- Runs on a **slow cadence** — far slower than memory extraction. Triggered by accumulated
-  creator exchanges or elapsed time, not by every turn. Personality that shifts hourly is
-  noise, not character.
-- Reads **only the creator's conversations**, per requirement. Other users' interactions never
-  influence it, even though they see the result — the bot's personality is the creator's, and
-  invitees meet whoever the creator has shaped.
-- Runs on the **utility model** (§3) and is logged as a §4.4 interaction with purpose
-  `PersonaEvolution`.
-- Is **bounded**: the worker rewrites only this layer. It cannot touch core or directives, and
-  it is prompted with both as constraints, so evolution refines within the identity rather
-  than replacing it.
+`[DECIDED]` (§4.7 step 3) — **the evolved layer is a list of short trait items** (`BotTraits`:
+id, text ≤ `Turn:MaxTraitChars` = 200, created-at, source message, retired-at; null = active;
+items are never deleted). The prompt shows the active items with their ids (`[12] teases them
+about their cooking`) so the bot can retire by id.
 
-**Versioning is required, not optional.** Every rewrite of the evolved layer is stored as a
-version with a timestamp and the interaction that produced it. The admin can read the history,
-diff it, and revert. A personality that drifts somewhere unwanted with no undo is a bad
-failure mode — and slow, cumulative drift is exactly the kind you notice late.
+- **Who changes it.** The bot, from inside a turn (envelope `traits`; **creator's
+  conversation only**, evolution switched on; guardrails in §4.7), and the admin on the
+  personality page (add, edit, remove). Other users' conversations never influence it, even
+  though they see the result — the bot's personality is the creator's, and invitees meet
+  whoever the creator has shaped. There is no free-text rewrite of the layer and **no message
+  watermarks**: the bot changes the list a few items at a time, as it happens.
+- **Bounded.** Core and directives are never reachable from the envelope; the list is capped
+  by count (`Turn:MaxTraits` = 20), per-item length, total length (`Turn:MaxTraitsTotalChars`
+  = 2000) and rate (`Turn:MaxTraitChangesPerDay` = 3). A human edit or revert arms a
+  **cooldown** (`Evolution:CooldownHours`, 12) during which the bot's own trait changes are
+  dropped, so a human correction is never immediately overwritten.
+- **Versioning is required, not optional.** `PersonaVersions` (one row per version, newest by
+  Id is current; older versions are never mutated). **Every change appends a version** holding
+  a JSON snapshot of the active items plus the rendered text, with sources `Initial` (empty
+  baseline created with the bot), `BotTurn`, `UserEdited`, `Revert` (restores the active set
+  from a version's snapshot, item ids kept; the revert itself is a visible new version),
+  `Consolidation`, and the historical `Evolution`. The admin reads the history, diffs it, and
+  reverts from the personality page. A personality that drifts somewhere unwanted with no undo
+  is a bad failure mode — and slow, cumulative drift is exactly the kind you notice late.
+- **Consolidation** is the only periodic pass left. It is armed (§12b) only when more than
+  `Turn:ConsolidateAbove` (12) items are active and the cooldown has passed (measured from the
+  newest version of any source). One **utility-model** call (core + directives as constraints,
+  logged `PersonaEvolution`, `Evolution:MaxTokens` = 1024) rewrites the list into fewer merged
+  items; the result must be a non-empty JSON array of strings, or the pass fails and retries.
+- **Legacy.** A bot with prose from the old rewrite pass gets it as **one legacy item** on
+  first read; older prose versions are read as one item too.
+- **Switch.** Evolution can be turned off per bot (`Bot.EvolutionEnabled`, toggle on the
+  personality page) for someone who wants a fixed character; the bot is then not offered the
+  `traits` field and consolidation does not run.
 
-The admin can also edit the evolved layer directly; an edited version is flagged so the next
-evolution pass treats it as the new baseline rather than overwriting a human correction.
-
-`[DECIDED]` (Phase 5) — implemented as `PersonaVersions` (one row per version, newest by Id
-is current; older versions are never mutated) with sources `Initial` (empty baseline created
-with the bot), `Evolution` (worker rewrite, carries the producing interaction's id),
-`UserEdited` (admin edit), and `Revert` (admin revert to an earlier version — the revert
-itself is visible in the history). The version history is readable and reversible from the
-personality page.
-
-`[DECIDED]` (§4.7 step 3 — supersedes the paragraphs above and below on the prose rewrite) —
-**the evolved layer is a list of short trait items** (`BotTraits`: id, text ≤
-`Turn:MaxTraitChars` = 200, created-at, source message, retired-at; null = active; items are
-never deleted). The prompt shows the active items with their ids (`[12] teases them about
-their cooking`) so the bot can retire by id. Who changes the list: the bot, from inside a turn
-(envelope `traits`, creator's conversation only, evolution on — guardrails in §4.7), and the
-admin on the personality page (add, edit, remove). **Every change appends a `PersonaVersion`**
-holding a JSON snapshot of the active items plus the rendered text, with sources `BotTurn`,
-`UserEdited`, `Revert`, `Consolidation` (and the historical `Evolution`); a revert restores the
-active set from a version's snapshot (item ids kept) and is itself a new version. A bot with
-prose from the old rewrite pass gets it as **one legacy item** on first read; older prose
-versions are read as one item too. A human edit or revert arms the cooldown during which the
-bot's own trait changes are dropped. The periodic pass is now **consolidation**: armed only
-when more than `Turn:ConsolidateAbove` (12) items are active and the cooldown
-(`Evolution:CooldownHours`, newest version of any source) has passed — no message watermarks.
-One utility-model call (core + directives as constraints, logged `PersonaEvolution`) rewrites
-the list into fewer merged items; the result must be a non-empty JSON array of strings or the
-pass fails and retries (§12b). `Bot.EvolutionUpToMessageId` is unused and goes in step 4.
-
-*Historical (Phase 5, superseded):* the worker (`PersonaEvolutionService`) sweeps every 30s but only
-acts when **both** hold: ≥ `Evolution:MinNewMessages` (default 40) new **creator** messages
-since the last completed pass (watermark `Bot.EvolutionUpToMessageId`), and the cooldown
-`Evolution:CooldownHours` (default 12) has elapsed, measured from the newest version of
-**any** source — so a human edit or revert also resets it, protecting a correction from an
-immediate overwrite. It rewrites only the evolved layer, prompted with core + directives as
-fixed constraints, on the utility model, logged as `PersonaEvolution` (§4.4). A pass that
-returns the baseline unchanged stores nothing. The watermark advances only on success.
-Evolution can be switched off per bot (`Bot.EvolutionEnabled`, toggle on the personality
-page) for someone who wants a fixed character.
+*Historical (Phase 5, superseded by §4.7 step 3):* the evolved layer was one prose document,
+rewritten by a worker (`PersonaEvolutionService`) once ≥ 40 new creator messages had passed
+and the cooldown had elapsed, tracked by a watermark (`Bot.EvolutionUpToMessageId`, dropped
+in T4's `DropWatermarks` migration); a human edit was treated as the new baseline.
 
 Resolved `[OPEN]`s — generation parameters stay on the **preset** in v1 (bot-level override
 revisited in Phase 8); import/export is **not in v1**; the per-bot evolution switch is
 **in**, as above.
 
-Verified end-to-end (real model): after a sustained conversation, the evolved-traits layer
-was rewritten from the creator's own material, the next prompt carried the layers in order
-(core → evolved → directives), the bot obeyed a standing directive, and the admin read the
-history, edited, and reverted.
+Verified end-to-end (Phase 5, real model; re-verified for the list against the mock by
+`traits.mjs` / `phase5-mock.mjs`): the next prompt carries the layers in order (core → evolved →
+directives), the bot obeys a standing directive, and the admin reads the history, edits, and
+reverts.
 
 ---
 
@@ -294,14 +277,14 @@ Fields:
 | Base endpoint | Blank permitted for providers with a well-known default (e.g. OpenAI) |
 | API key | Blank permitted for providers that don't need one (e.g. local Ollama). Stored encrypted — see §7.3 |
 | Generation model | The chat/completion model — the bot's actual voice |
-| Utility model | A second **generation** model for background chores: memory extraction and summarisation (§5.3). Usually smaller and cheaper than the generation model. Defaults to the generation model when blank |
+| Utility model | A second **generation** model for background chores: rolling summaries (§5.3) and trait-list consolidation (§2.4). Usually smaller and cheaper than the generation model. Defaults to the generation model when blank |
 | Embedding model | Text → vector, for memory search (§5.4). **Locked once a bot uses the preset** (§5.7) |
 
 The three models do different jobs and are not interchangeable: the embedding model produces
 vectors and cannot generate text at all; the generation model writes the bot's replies and is
 chosen for quality of voice; the utility model generates too, but only for machine-read
 structured output nobody sees, so it can be a much cheaper model. Separating utility from
-generation matters because extraction runs on every exchange, on the bot admin's key (§5.9.1),
+generation matters because background passes run on the bot admin's key (§5.9.1),
 and paying flagship prices to turn chat into JSON is waste.
 
 The preset editor UI includes a **"Load models"** action that queries the provider's model
@@ -382,7 +365,7 @@ should inform later turns is deferred to Phase 3 (prompt assembly).
 - Token counts (prompt / completion / total)
 - Endpoint and model used
 - `[OPEN]` additions: timestamps + latency, provider type, preset id, bot id, conversation
-  id, user id, purpose (chat / embedding / memory-extraction / summarisation), HTTP status,
+  id, user id, purpose (chat / embedding / summarisation / persona evolution; memory-extraction on rows written before §4.7), HTTP status,
   error message and provider error payload, retry count, estimated cost, finish reason.
 
 Plus a **UI to browse individual interactions** — filterable by bot, user, and outcome, with
@@ -444,7 +427,7 @@ Both are worth keeping in view while designing §5, since `remember(...)` writes
 same `Memory` table extraction does. The schema should not assume extraction is the only
 writer.
 
-### 4.7 Structured turn envelope `[DECIDED — steps 1–3 implemented: reply, mood, memories, traits]`
+### 4.7 Structured turn envelope `[DECIDED — implemented: reply, mood, memories, traits; extraction and prose evolution retired]`
 
 **Decision.** Every chat turn returns one JSON object instead of bare text. The bot says its
 reply *and* reports what the turn changed — in the same call, with the same context it used to
@@ -481,7 +464,7 @@ valid JSON, and that the bot is now its own scribe — hence the guardrails belo
   `Turn:MoodMinTurns` (default 6) turns **and** `Turn:MoodMinMinutes` (default 30) have passed
   since the last one; earlier changes are dropped and noted on the interaction. Capped in
   length; null means unchanged, empty string clears it.
-- **`memories`** — things worth remembering, same fields as extraction candidates (§5.3).
+- **`memories`** — things worth remembering, `content`, `kind`, `importance` (§5.3).
   Written through the **existing pipeline**: embed, dedupe/supersede against the scope,
   never overwrite a `UserEdited` row, `Source = BotRemember` (already in the enum),
   `SourceMessageId` = the assistant message. At most `Turn:MaxMemories` (default 3) per turn;
@@ -496,7 +479,8 @@ layer changes from one rewritten prose document to a list of short *trait items*
 an id, text, timestamp and the message that produced it. Every change still creates a
 `PersonaVersion` row (source `BotTurn`), so history, diff and revert (§2.4) keep working
 unchanged; the prompt renders the current items as the evolved block. `[DECIDED]` — the
-periodic prose-rewrite pass is kept as a slow *consolidation* pass over the trait list only.
+periodic prose-rewrite pass became a slow *consolidation* pass over the trait list only
+(§2.4).
 
 **Trait guardrails (step 3, implemented).** Applied only for a complete, valid envelope, and
 only when `bot.OwnerId == userId` **and** `Bot.EvolutionEnabled` (otherwise the field is not in
@@ -541,10 +525,13 @@ interaction is flagged `EnvelopeInvalid` in the log. A truncated reply (`finish_
 is a failure as today (retryable, §12b). Stop mid-stream persists the partial `reply` text
 only — side effects are applied only for a complete envelope.
 
-**What goes away, in order.** Memory extraction: the envelope's `memories` replace the
-worker, which is **removed outright** (no fallback switch). Persona evolution: `traits` replaces the worker, the prose
-rewrite survives only as the optional consolidation above. Summarisation: unchanged.
-The `ExtractionUpToMessageId` and `Bot.EvolutionUpToMessageId` watermarks become unused.
+**What went away.** Memory extraction: the envelope's `memories` replaced the worker, which
+was **removed outright** (no fallback switch; §5.3 keeps its history). Persona evolution:
+`traits` replaced the worker; the prose rewrite survives only as the consolidation pass
+(§2.4). Summarisation: unchanged. The `Conversation.ExtractionUpToMessageId` and
+`Bot.EvolutionUpToMessageId` watermarks were dropped by the `DropWatermarks` migration.
+`WorkKind.Extraction` and `InteractionPurpose.MemoryExtraction` stay in the enums so rows
+written before the change still read.
 
 **Prompt side.** The system block gains the mood line, the numbered trait items, and the
 envelope instructions (schema, when to write a memory, that traits are rare and slow,
@@ -553,9 +540,10 @@ messages sent back to the model carry the stored `reply` text only — never the
 so the model does not learn to imitate its own metadata.
 
 **Persistence.** `Message` stores the reply text as today; the parsed envelope and what was
-applied are stored on the §4.4 interaction (and a small `Message.Envelope` JSON column for
-the footer). `Conversation.Mood` is new. Trait items are a new table; migrations are
-authored with `dotnet ef`.
+applied are stored on the §4.4 interaction (`Notes` records what was dropped); the footer
+data (`remembered`, `traitChanges`) travels on `chat.completed`. `Conversation.Mood` (and
+`MoodChangedAtMessageId`/`…At`) is new, as is the `BotTraits` table; migrations are authored
+with `dotnet ef`.
 
 **Delivery** (each step leaves the app runnable):
 
@@ -564,7 +552,14 @@ authored with `dotnet ef`.
 2. `memories` through the existing pipeline; the extraction worker is removed.
 3. ✅ Trait items, `traits` field, guardrails, footer; evolution worker reduced to the
    consolidation pass.
-4. Remove dead code and the unused watermarks; update §5.3 and §2.4.
+4. ✅ Dead code and the unused watermarks removed; §2.4, §5.3, §12b and the e2e scripts
+   brought up to date.
+
+*Deviations from the plan as built:* the total-length cap on trait items is its own key,
+`Turn:MaxTraitsTotalChars` (2000), because the plan reused `Turn:MaxTraitChars` for both;
+`Evolution:MaxTokens` (the consolidation call) defaults to 1024 rather than 512; the
+`Evolution:MinNewMessages` / `MaxTailMessages` keys no longer exist; and there is no
+`Message.Envelope` column.
 
 *Done when*: a turn streams its reply live while the bot sets its mood, records a memory
 that is recalled later, and — in the creator's conversation — adds a trait that appears in
@@ -603,17 +598,53 @@ Summary and memory serve different jobs and are both needed: the summary keeps t
 the relationship ("you have been talking about her thesis for weeks"), while memories recall
 *specifics* that similarity search can surface from months back ("her sister is named Ann").
 
-### 5.3 Memory formation `[DECIDED — implemented in Phase 4; extraction worker retired by §4.7 step 2]`
+### 5.3 Memory formation `[DECIDED — implemented in Phase 4; extraction worker retired by §4.7]`
 
-> **Update.** The background extraction pass described below no longer exists. The bot records
-> memories itself in the turn envelope (§4.7, `memories`), through the same embed → dedupe →
-> supersede pipeline (`MemoryWriter`; thresholds and the `UserEdited`-wins rule unchanged), with
-> `Source = BotRemember`. The `Extraction:*` settings and the extraction work kind are gone
-> (`WorkKind.Extraction` stays in the enum so old rows still map). The summary pass below is
-> unchanged. Text below is kept as the history of the decision.
+Two things form what the bot knows of a relationship, and neither blocks a turn:
 
-A background hosted service — `MemoryExtractionService` — reads new messages and writes
-memories. It is **not** in the request path; a turn never waits on extraction.
+**Memories — written by the bot, in the turn.** The bot records memories itself in the turn
+envelope (§4.7, `memories`): durable facts and meaningful events, not pleasantries — `[]` is
+the normal outcome, and at most `Turn:MaxMemories` (3) are taken per turn. Each candidate goes
+through the memory pipeline (`MemoryWriter`):
+
+- **Embedding**: embedded with the preset's embedding model.
+- **Deduplication**: compared to the nearest existing memory in scope: similarity ≥
+  `Memory:DedupThreshold` (0.92) → drop (duplicate); ≥ `Memory:SupersedeThreshold` (0.85) →
+  supersede (insert new, link the old row's `SupersededByMemoryId`); otherwise insert. A
+  `UserEdited` neighbour is never superseded — the candidate is dropped instead, so a human
+  correction always wins.
+- **Provenance**: `Source = BotRemember`, `SourceMessageId` = the assistant message; the call
+  that produced it is the turn's §4.4 interaction (purpose `Chat`).
+
+Memories are applied only for a complete, valid envelope; a garbled one loses nothing the user
+sees and writes nothing.
+
+**Rolling summary — a background pass.**
+
+`ConversationSummary` is refreshed by a work-queue pass (§12b) when the un-summarised tail exceeds a
+token threshold: it takes the previous summary plus the newly-aged-out messages and rewrites
+the summary in place.
+
+`[DECIDED]` (Phase 3; now armed by the §12b producer every `Work:TickSeconds`) — the pass covers conversations whose
+un-summarised tail (messages after the summary's watermark, `CoversUpToMessageId`) exceeds
+`Chat:SummaryTailTokens`. It rewrites the single summary row in place and advances the
+watermark; a failed pass leaves the watermark untouched so the same tail retries on the
+next sweep. The summary prompt requires recording every personal detail the user has shared
+(names, dates, plans, preferences) — the bot must be able to answer questions about any of
+them later. A pass that ends `finish_reason=length` is treated as a failure: a truncated
+summary must never replace a good one. Verified end-to-end: a bot recalled facts planted
+far outside its recent-history window, and reacted correctly to a multi-hour silence.
+
+#### 5.3.1 Historical: the background extraction pass (retired)
+
+Until §4.7 step 2, memories were written by a separate worker, not by the bot. It is gone — the
+`Extraction:*` settings, the `Conversation.ExtractionUpToMessageId` watermark (dropped by the
+`DropWatermarks` migration) and the extraction handler no longer exist; `WorkKind.Extraction`
+and `InteractionPurpose.MemoryExtraction` stay in the enums so old queue and log rows still map.
+Kept here as the history of the decision, not as spec.
+
+A background service — `MemoryExtractionService` — read new messages and writes
+memories. It was **not** in the request path.
 
 - **Trigger**: after a turn completes, enqueue the `(BotId, UserId)` pair. The worker debounces
   — it runs when either *M* new messages have accumulated or the conversation has been idle
@@ -628,21 +659,7 @@ memories. It is **not** in the request path; a turn never waits on extraction.
 - **Every extraction call is logged to §4.4** with purpose `MemoryExtraction`, like any other
   LLM interaction.
 
-`ConversationSummary` is refreshed by the same worker when the un-summarised tail exceeds a
-token threshold: it takes the previous summary plus the newly-aged-out messages and rewrites
-the summary in place.
-
-`[DECIDED]` (Phase 3) — the worker is a periodic sweep (every 15s) over conversations whose
-un-summarised tail (messages after the summary's watermark, `CoversUpToMessageId`) exceeds
-`Chat:SummaryTailTokens`. It rewrites the single summary row in place and advances the
-watermark; a failed pass leaves the watermark untouched so the same tail retries on the
-next sweep. The summary prompt requires recording every personal detail the user has shared
-(names, dates, plans, preferences) — the bot must be able to answer questions about any of
-them later. A pass that ends `finish_reason=length` is treated as a failure: a truncated
-summary must never replace a good one. Verified end-to-end: a bot recalled facts planted
-far outside its recent-history window, and reacted correctly to a multi-hour silence.
-
-`[DECIDED]` (Phase 4) — extraction runs in the same 15s sweep, on a separate watermark
+`[DECIDED]` (Phase 4, superseded) — extraction ran in the same 15s sweep, on a separate watermark
 (`Conversation.ExtractionUpToMessageId`) so the two passes are independent. Trigger:
 `Extraction:MinNewMessages` (default 8) new messages since the watermark, or the
 conversation idle for `Extraction:IdleMinutes` (default 10). One LLM call over the tail
@@ -684,7 +701,7 @@ score = w_sim · similarity
 ```
 
 Recency matters because a friend should favour what is currently true; importance lets
-extraction mark "she got the job" above "she likes oat milk". Defaults need tuning against
+the bot mark "she got the job" above "she likes oat milk". Defaults need tuning against
 real conversations — treat the initial numbers as guesses.
 
 `[DECIDED]` (Phase 4) — implemented as `MemoryRetriever` (raw SQL cosine search scoped to
@@ -736,20 +753,20 @@ mid-line); pinned memories are kept first. The full block is dropped if nothing 
 
 ### 5.6 Lifecycle and user control `[DECIDED — implemented in Phase 4]`
 
-- **Superseding**: when extraction produces a memory that contradicts an existing one, the old
+- **Superseding**: when the bot records a memory that contradicts an existing one, the old
   row is marked `SupersededByMemoryId` rather than deleted — the history stays inspectable.
 - **No automatic forgetting** in v1. Memories are not deleted by age; recency handles
   relevance through ranking instead. Simpler, and irreversible deletion of a friend's memory
   is a bad default.
 - **A memory viewer is mandatory, not optional.** Per bot, the user can list, search, edit,
   pin, and delete their own memories, plus "forget everything". This is the only way to answer
-  "why did my friend say that", and the only remedy when extraction records something wrong.
-  Edited rows are flagged so extraction never silently overwrites a human correction.
+  "why did my friend say that", and the only remedy when the bot records something wrong.
+  Edited rows are flagged so the bot never silently overwrites a human correction.
 - A user's memories are visible only to that user — including to the bot admin (§2.5.2).
 
 `[DECIDED]` (Phase 4) — all of the above is implemented:
 
-- Supersede, not delete: extraction links the old row via `SupersededByMemoryId`; the
+- Supersede, not delete: the memory pipeline links the old row via `SupersededByMemoryId`; the
   viewer renders those rows in a separate *History* section (faded, read-only, no
   supersede cycle possible from there).
 - No automatic forgetting — the only deletion path is the user's explicit forget.
@@ -757,8 +774,8 @@ mid-line); pinned memories are kept first. The full block is dropped if nothing 
   (re-embeds the row with the preset's embedding model when the content changes, sets
   `Source = UserEdited`), pin/unpin, forget (soft delete: `IsDeleted = true`, still
   inspectable in History), and *Forget everything* for the bot.
-- Manual add is **not** in v1 — the user edits what extraction produced rather than
-  authoring facts from scratch. Simpler, and it keeps the extraction-vs-correction
+- Manual add is **not** in v1 — the user edits what the bot recorded rather than
+  authoring facts from scratch. Simpler, and it keeps the bot-vs-correction
   boundary clean (see §5.10, q2).
 - Every endpoint is scoped to the caller's `(BotId, UserId)`; other users' rows for the
   same bot are never returned.
@@ -798,9 +815,9 @@ Memory
   Embedding          vector             -- dimensionless, see §6
   EmbeddingModel     text
   EmbeddingDimension int
-  Importance         int                -- 1..5, set by extraction
+  Importance         int                -- 1..5, set by the bot (formerly extraction)
   IsPinned           bool
-  Source                                -- Extraction | UserEdited | BotRemember (§4.6)
+  Source                                -- Extraction (historical) | UserEdited | BotRemember (§4.7)
   SourceMessageId    int?               -- provenance, for the viewer
   SupersededByMemoryId int?
   CreatedAt, LastRecalledAt, RecallCount
@@ -814,7 +831,7 @@ ConversationSummary
 ```
 
 `[DECIDED]` (Phase 4) — the implemented schema matches the sketch exactly (migration
-`AddMemoryExtractionWatermarkAndRecall` added `Conversation.ExtractionUpToMessageId` and
+`AddMemoryExtractionWatermarkAndRecall` added `Conversation.ExtractionUpToMessageId` — dropped again in §4.7 step 4 — and
 `LlmInteraction.RecalledMemoryIds` on top). `EmbeddingDimension` is stored on every row
 so a model mismatch is detectable, per §5.7. `Kind` and `Source` are stored as integers
 (EF's default enum mapping) — raw SQL projections must read them as int.
@@ -869,7 +886,7 @@ templates) reject system messages mid-conversation.
 3. `[DECIDED]` (v1) — persona is static text; no memory placeholders. Memories are
    assembled at prompt time (§5.5), so there is nothing to reference from the persona.
 4. `[OPEN]` — no onboarding step in v1. The first message goes to a fresh, memory-less
-   friend; extraction starts recording from turn one.
+   friend; the bot can record memories from turn one.
 5. `[OPEN]` — the summary is not user-visible or editable in v1. It is an internal
    continuity device; memories (§5.6) are the user-facing record. Revisit if users ask.
 
@@ -1026,12 +1043,12 @@ system **admin** manages accounts.
 | `src/achat-ui` | React 19 + TypeScript + Vite SPA |
 
 abook additionally has `ABook.Agents` for its orchestration layer. AChat's equivalent — the
-memory extraction / summarisation / proactive-messaging logic — may warrant `AChat.Bots` or
+summarisation / consolidation / proactive-messaging logic — may warrant `AChat.Bots` or
 may be small enough to live in `Infrastructure`. `[OPEN]`
 
 `[OPEN]`:
-- Which background workers exist. Known candidates: memory extraction, conversation
-  summarisation, proactive messaging (if adopted), audit-log pruning.
+- Which background workers exist. Known candidates (now: summarisation and trait consolidation on the §12b queue; extraction retired),
+  conversation summarisation, proactive messaging (if adopted), audit-log pruning.
 - How background work is scheduled and made crash-safe (in-process timers vs. a
   database-backed job queue). If proactive messaging is in scope this needs to be durable.
 - Error model (`ProblemDetails`), validation, logging (structured; Serilog?), health
@@ -1383,10 +1400,10 @@ and reacts appropriately to a three-day gap.
 
 ### Phase 4 — Long-term memory
 
-Embedding model on presets, pgvector storage, the extraction worker, ranked retrieval, and
+Embedding model on presets, pgvector storage, memory formation (the extraction worker, replaced by the envelope in §4.7), ranked retrieval, and
 the memory viewer/editor (§5.3–5.6, §5.8). Embedding-model locking (§5.7).
 
-The viewer ships **in this phase, not after it** — extraction will record wrong things, and
+The viewer ships **in this phase, not after it** — memory formation will record wrong things, and
 without the viewer there is no way to see that or fix it.
 
 *Done when*: a bot recalls a specific fact from far outside its context window, and the user
@@ -1442,12 +1459,16 @@ sharing (Phase 6) much earlier, if having a second user is important to how you 
 
 ## 12b. Durable Work Pipeline `[DECIDED]`
 
-**Problem.** The background passes (memory extraction §5.3, persona evolution §2.4,
-summarisation §5.3) were fire-and-forget: a failed pass — provider down, quota, malformed
+**Problem.** The background passes (memory extraction, persona evolution,
+summarisation) were fire-and-forget: a failed pass — provider down, quota, malformed
 JSON — logged a warning and the next sweep hammered it again. No backoff, no attempt cap,
 no dead letter, and nothing in the database to show that work had failed. And when a chat
 generation failed, the turn was a dead end: the user's message sat in the timeline with no
 reply and no way to ask again without retyping.
+
+*Since §4.7 the queue carries two kinds, Summary (§5.3) and Consolidation (§2.4); the
+extraction kind was retired with the extraction pass, and the watermark mechanics mentioned
+below survive only for summaries (`CoversUpToMessageId`).*
 
 What the product needed was not durable *storage* — that is already true: the watermarks
 advance only inside the success transaction (at-least-once), the user's message is committed
@@ -1467,7 +1488,8 @@ reminders, proactive messaging) — an outbox pattern for delivery. Until then, 
 ```
 WorkItems
   Id             int PK
-  Kind           enum  Extraction | Evolution | Summary
+  Kind           enum  Summary | Evolution (= consolidation); Extraction (0) is retired
+                        and kept only so old rows map
   ConversationId int — the target conversation (evolution: the creator's conversation,
                         which is unique per bot — §2.3)
   Status         enum  Pending | Running | Dead
@@ -1482,22 +1504,23 @@ WorkItems
 ### Mechanics
 
 - **Producers** (one per kind, the existing sweeps minus their execution): on each tick they
-  re-evaluate their trigger (watermark thresholds, cooldown, summary tail) and *upsert* a
+  re-evaluate their trigger (summary tail, trait-list length and cooldown) and *upsert* a
   `Pending` work item — `INSERT … skip if one already exists for that (Kind, ConversationId)`
   in any status. A `Dead` item is therefore **frozen until an admin acts** (retry or
   discard): the queue never hammers a persistently failing target by itself.
 - **Worker**: one hosted service. Each tick it runs the producers, then claims the oldest
   due `Pending` item, marks it `Running` with `Attempts += 1`, and dispatches to the
   kind's handler. The handler re-validates its trigger (conditions may no longer hold — the
-  watermark may have advanced, evolution may have been switched off) and no-ops-succeeds if
+  summary watermark may have advanced, evolution may have been switched off, the list may
+  already be short) and no-ops-succeeds if
   they don't, so a stale claim self-heals.
-- **Outcomes.** Success → the row is deleted (the handler has already advanced its
+- **Outcomes.** Success → the row is deleted (the handler has already advanced the summary
   watermark / written its version / rewritten the summary). Failure → `LastFailure` is
   stored, and either `Status = Dead` (attempts exhausted) or back to `Pending` with
   `NextTryAt = now + min(MaxDelay, BaseDelay · 2^attempts) + jitter`.
-- **At-least-once, idempotent handlers.** Extraction dedups on similarity (§5.3); evolution
-  appends a version (re-claiming after a post-commit crash finds an empty tail and no-ops);
-  summarisation is an in-place rewrite of the same input. A double execution is harmless.
+- **At-least-once, idempotent handlers.** Consolidation appends a version (re-claiming after a
+  post-commit crash finds a short list and no-ops); summarisation is an in-place rewrite of
+  the same input. A double execution is harmless.
 - **Single-instance claim.** The claim is optimistic (read-then-mark), which is correct for
   the one-app-container deployment (the same assumption §6 already makes for migration
   application). A multi-replica deployment would need `FOR UPDATE SKIP LOCKED`; worst case
@@ -1550,9 +1573,13 @@ disable/reset/delete users with self-lockout and audit-log guards (§7.4), per-b
 + usage quota + per-user usage visibility (§2.5), interaction-log retention via a background
 worker (§4.4), transient-failure retry with backoff (§4.5), non-root container, accessibility
 pass, and backup guidance · **§12b**: the durable work pipeline — background passes
-(extraction / evolution / summarisation) queue as `WorkItems` with backoff, an attempt
+(summarisation, consolidation) queue as `WorkItems` with backoff, an attempt
 cap, and dead-lettering into the admin panel; a failed chat turn is re-runnable via
-"try again" (`RetryLastAsync`) — implemented and verified end-to-end.
+"try again" (`RetryLastAsync`) — implemented and verified end-to-end · **§4.7**: the
+structured turn envelope — reply, damped mood, bot-written memories, bot-written trait
+changes with guardrails — replaced the separate extraction worker and the prose evolution
+rewrite (§2.4, §5.3); the trait list, versioning and consolidation are implemented, and the
+dead schema and e2e scripts were cleaned up in T4.
 
 **Still open, roughly by weight:**
 
@@ -1565,6 +1592,6 @@ cap, and dead-lettering into the admin panel; a failed chat turn is re-runnable 
 4. Onboarding — what a bot knows at the first message of a new relationship. (§5.10.4)
 5. Bot reassignment to a preset with a different embedding model: block, or re-embed? (§5.7)
 6. Whether variable-length embeddings need an indexing strategy at AChat's row counts. (§6)
-7. Tuning the ranking/extraction/evolution constants against real conversations — all
+7. Tuning the ranking, envelope (`Turn:*`) and consolidation constants against real conversations — all
    currently first guesses, all in config.
 8. ~~Admin user management beyond creation (disable / reset / delete)~~ — *resolved in Phase 8* (§7.4).

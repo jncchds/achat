@@ -378,7 +378,7 @@ public sealed record InteractionDetailDto
 public sealed record WorkItemDto
 {
     public int Id { get; init; }
-    /// <summary>Extraction | Evolution | Summary.</summary>
+    /// <summary>Evolution (consolidation) | Summary; Extraction only on pre-§4.7 rows.</summary>
     public string Kind { get; init; } = "";
     public int ConversationId { get; init; }
     public int BotId { get; init; }

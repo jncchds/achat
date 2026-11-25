@@ -23,6 +23,20 @@ Point a **preset** at a model endpoint — local Ollama, OpenAI, Google AI Studi
 OpenAI-compatible gateway (llama.cpp, vLLM, LM Studio, OpenRouter, …) — create a **bot**
 (name + who they are), and talk.
 
+## How a turn works
+
+Every reply is one LLM call that returns a small JSON **turn envelope**
+(`docs/design.md` §4.7): `{"reply", "mood", "memories", "traits"}`. The reply is
+streamed to you as it is written; the rest is read when the call completes. The bot's
+**mood** is conversation state (damped — it can change only after several turns and
+some minutes), its **memories** are things it chose to remember (embedded, deduplicated,
+recalled by relevance in later turns), and, in its creator's conversation only, its
+**traits** are short items about the friendship that join the persona's evolved layer
+(guard-railed, versioned and revertable). Core persona and standing directives are never
+reachable from the envelope. A reply that isn't valid JSON is still delivered as plain
+text and has no side effects. Two slow background passes remain on the durable work
+queue: rolling summaries, and consolidation of the trait list when it grows long.
+
 ## Configuration
 
 All settings live in `appsettings.json` and are overridable by environment variable
@@ -114,21 +128,26 @@ docker run -d --name achat-e2e --network achat_default -p 5002:8080 \
   -e ACHAT_Jwt__SigningKey="e2e-acht-signing-key-0123456789abcdef0123456789abcdef" \
   -e ACHAT_BootstrapAdmin__LoginName=admin -e ACHAT_BootstrapAdmin__Password=admin \
   achat-achat
-ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase6.mjs   # sharing: request → approve → separate scope
-ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase5.mjs   # PHASE5_PRESET=<id> picks the preset
-ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase5-mock.mjs  # offline (mock on 18999)
-ACHAT_BASE=http://localhost:5002 node scripts/e2e/traits.mjs       # trait list: creator-only, cooldown, revert (needs the mock on 18999 and the default 12 h cooldown)
-ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase4.mjs
-ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase3.mjs
-ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase7-verify.mjs  # new providers against a live endpoint
+# The scripts below use the mock LLM (`node scripts/e2e/mockllm.mjs`, port 18999) unless noted
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase5-mock.mjs  # turn envelope: prompt order, bot memories + trait in one turn, garbled reply is harmless
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/traits.mjs       # trait list: creator-only, cooldown, revert (needs the default 12 h cooldown)
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase4.mjs       # bot memories → recall in the prompt → viewer edit/pin/forget → embedding lock
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase6.mjs       # sharing: request → approve → separate scope (messages and memories)
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase8-verify.mjs  # disable/reset, kill switch, quota, usage
-ACHAT_BASE=http://localhost:5002 node scripts/e2e/workqueue.mjs      # dead-endpoint → dead-letter → try-again → admin retry
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase3.mjs       # needs a REAL model (recall via summary, gap awareness); HistoryTurns=4, SummaryTailTokens=50, GapThresholdMinutes=1
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase7-verify.mjs  # new providers against a live endpoint
+BASE=http://localhost:5002 node scripts/e2e/workqueue.mjs          # dead endpoint → summary + consolidation dead-letter → try-again → admin retry
 ```
 
-`workqueue.mjs` is fastest with a fast queue: add `-e ACHAT_Work__TickSeconds=2
--e ACHAT_Work__MaxAttempts=3 -e ACHAT_Work__BaseDelaySeconds=2 -e
-ACHAT_Work__MaxDelaySeconds=8` to the throwaway instance, and point its preset at a
-keyless endpoint (the script flips the endpoint dead, then to a working one).
+`workqueue.mjs` needs a fast queue and low thresholds on the throwaway instance (it also
+needs the mock): `-e ACHAT_Work__TickSeconds=2 -e ACHAT_Work__MaxAttempts=3
+-e ACHAT_Work__BaseDelaySeconds=2 -e ACHAT_Work__MaxDelaySeconds=8
+-e ACHAT_Chat__SummaryTailTokens=20 -e ACHAT_Turn__ConsolidateAbove=2
+-e ACHAT_Evolution__CooldownHours=0`. The script flips a preset's endpoint dead, then to
+the mock. `traits.mjs` must run **without** `Evolution__CooldownHours=0`.
+
+Other scripts: `detached-chat.mjs` and `hub-reattach.mjs` (a run survives the page
+leaving / re-attaches mid-reply), `interactions-check.mjs`, `theme-check.mjs`.
 
 The mock LLM (`node scripts/e2e/mockllm.mjs [port]`, default 18999) serves
 `/v1/models`, `/v1/chat/completions` (purpose-aware replies) and `/v1/embeddings`
@@ -161,19 +180,21 @@ src/
   manual override), rolling summary worker (utility model, watermark, logged),
   token-budgeted prompt assembly, gap markers — verified: a bot recalls facts planted
   outside its recent window and reacts to a multi-hour silence
-- **Phase 4 — Long-term memory** ✅ background extraction (utility model, watermark,
-  dedup/supersede), cosine retrieval ranked by similarity + importance + recency with
+- **Phase 4 — Long-term memory** ✅ the bot records memories itself in its turn
+  envelope (originally a background extraction pass, retired in §4.7), with
+  dedup/supersede, cosine retrieval ranked by similarity + importance + recency with
   relative ages, recalled ids surfaced in chat and in the interaction log, memory
   viewer (list / search / edit / pin / forget / forget-all), embedding-model lock
-  (§5.7) — verified: facts planted outside the recent window are recalled by name, and
-  a viewer edit flows into the bot's next answer
+  (§5.7) — verified: facts the bot remembered are recalled in later prompts, and a
+  viewer edit flows into the bot's next answer
 - **Phase 5 — Evolving personality** ✅ three-layer persona (core → evolved traits →
-  directives, directives win), versioned evolved layer (history, edit, revert), slow
-  background evolution over creator conversations only (utility model, watermark,
-  cooldown, bounded by core + directives), per-bot evolution switch — verified: after
-  sustained conversation the bot's evolved traits changed, the next prompt carried the
-  layers in order, a standing directive was obeyed, and revert restored an earlier
-  version
+  directives, directives win). The evolved layer is a **list of short trait items**
+  the bot adds and retires itself in its creator's conversation (rate-limited, capped,
+  cooldown after human edits), versioned with history, edit, diff and revert; a slow
+  consolidation pass merges the list when it grows past a threshold; per-bot
+  evolution switch. The original prose-rewrite evolution pass was replaced by this in
+  §4.7 — verified: a trait added in a turn shows up in the next prompt in order
+  core → traits → directives, a second user cannot change it, and revert restores it
 - **Phase 6 — Sharing** ✅ bot sharing: per-bot invite code, access requests + admin
   approval queue, per-user memory scope, shared bots badged, revoke (relationship
   retained), code regeneration, admin creates users — verified: a second user requests
@@ -192,15 +213,17 @@ src/
   accessibility pass, backup guidance — verified: a disabled user is refused at login,
   a paused bot stops answering, a quota-capped bot stops at the cap, and the usage
   view breaks spend down by user
-- **Durable work pipeline (§12b)** ✅ memory extraction, persona evolution, and
-  summarisation now run through a durable background-work queue: a failed pass
-  retries with **backoff** and an **attempt cap**, then **dead-letters** into the
-  admin panel instead of hammering the provider; admins can **retry** or
-  **discard** any item. A failed chat turn is no longer a dead end — **"Try
-  again"** re-runs the last unanswered turn — verified: a dead endpoint dead-
-  letters extraction (3/3 attempts, visible failure), "try again" succeeds once
-  the endpoint is fixed, an admin retry re-arms the pass, memories land, and the
-  queue clears
+- **Durable work pipeline (§12b)** ✅ summarisation and persona consolidation run
+  through a durable background-work queue: a failed pass retries with **backoff**
+  and an **attempt cap**, then **dead-letters** into the admin panel instead of
+  hammering the provider; admins can **retry** or **discard** any item. A failed chat
+  turn is no longer a dead end — **"Try again"** re-runs the last unanswered turn —
+  verified: a dead endpoint dead-letters summarisation and consolidation (3/3
+  attempts, visible failure), "try again" succeeds once the endpoint is fixed, an
+  admin retry re-arms both passes, and the queue clears
+- **Turn envelope (§4.7)** ✅ one structured reply per turn: mood (damped), bot-written
+  memories, and bot-written trait changes, replacing the separate extraction and
+  prose-evolution passes — see *How a turn works*
 
 ## Backing up
 

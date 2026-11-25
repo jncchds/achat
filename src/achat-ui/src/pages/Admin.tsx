@@ -168,7 +168,7 @@ export default function Admin() {
 
       <h3 style={{ marginTop: '2rem', marginBottom: '0.75rem' }}>Background work</h3>
       <p className="hint" style={{ marginTop: 0 }}>
-        Memory extraction, personality evolution, and summarisation run off the request path as
+        Summarisation and personality consolidation run off the request path as
         durable background work (§12b). A failed pass retries with backoff; after the attempt cap
         it dead-letters here instead of hammering the provider. Retry re-arms an item, discard
         removes it (the worker may re-arm it if its trigger still holds).

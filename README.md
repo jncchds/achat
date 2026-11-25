@@ -49,10 +49,13 @@ with the `ACHAT_` prefix and .NET nested-key convention (`ACHAT_Section__Key`):
 | `Memory__RecencyHalflifeDays` | `30` | Recency decay half-life |
 | `Memory__DedupThreshold` / `SupersedeThreshold` | `0.92 / 0.85` | Candidate-vs-nearest similarity: ≥0.92 drop as duplicate, ≥0.85 supersede (§5.3) |
 | `Turn__MaxMemories` | `3` | Most memories the bot may record in one turn's envelope (§4.7) |
-| `Evolution__MinNewMessages` | `40` | New creator messages since the last pass that trigger an evolution rewrite (§2.4) |
-| `Evolution__CooldownHours` | `12` | Cooldown between rewrites — a human edit or revert also resets it |
-| `Evolution__MaxTailMessages` | `60` | Conversation tail sent to the evolver |
-| `Evolution__MaxTokens` | `512` | Output cap for the evolution call |
+| `Turn__MaxTraitChangesPerDay` | `3` | Trait changes (adds + retires) the bot may make per rolling 24 h; creator's turns only (§4.7) |
+| `Turn__MaxTraits` | `20` | Active trait items; over it the bot's adds are refused until something is retired |
+| `Turn__MaxTraitChars` | `200` | Longest single trait item (longer ones are clipped; also the limit for human adds/edits) |
+| `Turn__MaxTraitsTotalChars` | `2000` | Total characters over all active items; same refusal as above |
+| `Turn__ConsolidateAbove` | `12` | Active trait items above which the slow consolidation pass is armed (§2.4) |
+| `Evolution__CooldownHours` | `12` | Cooldown after a human edit/revert during which the bot's trait changes are dropped, and between consolidation passes (newest version of any source) |
+| `Evolution__MaxTokens` | `1024` | Output cap for the consolidation call |
 | `Turn__MoodMinTurns` / `Turn__MoodMinMinutes` | `6 / 30` | A bot's mood may change only after this many user turns **and** minutes since its last change (§4.7) |
 | `Retention__InteractionDays` | `90` | Prune audit-log interactions older than this many days; `0` = keep forever (§4.4) |
 | `Retention__IntervalHours` | `6` | How often the retention worker runs |
@@ -110,12 +113,11 @@ docker run -d --name achat-e2e --network achat_default -p 5002:8080 \
   -e ACHAT_ConnectionStrings__DefaultConnection="Host=postgres;Port=5432;Database=achat;Username=achat;Password=achat" \
   -e ACHAT_Jwt__SigningKey="e2e-acht-signing-key-0123456789abcdef0123456789abcdef" \
   -e ACHAT_BootstrapAdmin__LoginName=admin -e ACHAT_BootstrapAdmin__Password=admin \
-  -e ACHAT_Evolution__MinNewMessages=6 -e ACHAT_Evolution__CooldownHours=0 \
-  -e ACHAT_Extraction__MinNewMessages=2 -e ACHAT_Extraction__IdleMinutes=0 \
   achat-achat
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase6.mjs   # sharing: request → approve → separate scope
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase5.mjs   # PHASE5_PRESET=<id> picks the preset
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase5-mock.mjs  # offline (mock on 18999)
+ACHAT_BASE=http://localhost:5002 node scripts/e2e/traits.mjs       # trait list: creator-only, cooldown, revert (needs the mock on 18999 and the default 12 h cooldown)
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase4.mjs
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase3.mjs
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase7-verify.mjs  # new providers against a live endpoint

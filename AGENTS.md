@@ -46,7 +46,7 @@ src/achat-ui/             React 19 + TypeScript + Vite SPA (plain CSS, Grove pal
   `smoke.mjs` (Playwright, headless), `sigtest.mjs` (SignalR client), per-phase
   scripts (`phase3`–`phase6.mjs`, `phase7-verify.mjs`, `phase8-verify.mjs`,
   `workqueue.mjs`),
-  `phase5-mock.mjs` (offline pipeline check), and `mockllm.mjs` (OpenAI-compatible
+  `phase5-mock.mjs` (offline pipeline check), `traits.mjs` (trait list against the mock), and `mockllm.mjs` (OpenAI-compatible
   mock with a request log). Run against the containerized app at
   `http://localhost:5001` (admin/admin bootstrap); the phase scripts point at a
   throwaway `achat-e2e` instance on `5002` with fast worker triggers.

@@ -190,7 +190,7 @@ lifetimes, and different rules about who may change them.
 |---|---|---|---|
 | **Core** | Bot admin, at creation | Only by explicit edit | The anchor identity — who this friend fundamentally is |
 | **Directives** | Bot admin, explicitly | Added, edited, removed at will | Deliberate correction: "be more blunt", "never bring up my ex" |
-| **Evolved traits** | The system, from creator conversations | Rewritten periodically by a background worker | Drift: how the friendship has actually shaped them |
+| **Evolved traits** | The bot itself, in the creator's conversation (§4.7); the admin by hand | A short list of items, added / retired a few times a month; merged by a slow background pass | Drift: how the friendship has actually shaped them |
 
 **Core** — the seed, written once when the bot is created. Name, avatar, and a freeform
 description of who they are: background, temperament, how they speak. Freeform prose rather
@@ -241,7 +241,26 @@ with the bot), `Evolution` (worker rewrite, carries the producing interaction's 
 itself is visible in the history). The version history is readable and reversible from the
 personality page.
 
-`[DECIDED]` (Phase 5) — the worker (`PersonaEvolutionService`) sweeps every 30s but only
+`[DECIDED]` (§4.7 step 3 — supersedes the paragraphs above and below on the prose rewrite) —
+**the evolved layer is a list of short trait items** (`BotTraits`: id, text ≤
+`Turn:MaxTraitChars` = 200, created-at, source message, retired-at; null = active; items are
+never deleted). The prompt shows the active items with their ids (`[12] teases them about
+their cooking`) so the bot can retire by id. Who changes the list: the bot, from inside a turn
+(envelope `traits`, creator's conversation only, evolution on — guardrails in §4.7), and the
+admin on the personality page (add, edit, remove). **Every change appends a `PersonaVersion`**
+holding a JSON snapshot of the active items plus the rendered text, with sources `BotTurn`,
+`UserEdited`, `Revert`, `Consolidation` (and the historical `Evolution`); a revert restores the
+active set from a version's snapshot (item ids kept) and is itself a new version. A bot with
+prose from the old rewrite pass gets it as **one legacy item** on first read; older prose
+versions are read as one item too. A human edit or revert arms the cooldown during which the
+bot's own trait changes are dropped. The periodic pass is now **consolidation**: armed only
+when more than `Turn:ConsolidateAbove` (12) items are active and the cooldown
+(`Evolution:CooldownHours`, newest version of any source) has passed — no message watermarks.
+One utility-model call (core + directives as constraints, logged `PersonaEvolution`) rewrites
+the list into fewer merged items; the result must be a non-empty JSON array of strings or the
+pass fails and retries (§12b). `Bot.EvolutionUpToMessageId` is unused and goes in step 4.
+
+*Historical (Phase 5, superseded):* the worker (`PersonaEvolutionService`) sweeps every 30s but only
 acts when **both** hold: ≥ `Evolution:MinNewMessages` (default 40) new **creator** messages
 since the last completed pass (watermark `Bot.EvolutionUpToMessageId`), and the cooldown
 `Evolution:CooldownHours` (default 12) has elapsed, measured from the newest version of
@@ -425,7 +444,7 @@ Both are worth keeping in view while designing §5, since `remember(...)` writes
 same `Memory` table extraction does. The schema should not assume extraction is the only
 writer.
 
-### 4.7 Structured turn envelope `[DECIDED — steps 1–2 implemented: reply, mood, memories]`
+### 4.7 Structured turn envelope `[DECIDED — steps 1–3 implemented: reply, mood, memories, traits]`
 
 **Decision.** Every chat turn returns one JSON object instead of bare text. The bot says its
 reply *and* reports what the turn changed — in the same call, with the same context it used to
@@ -476,10 +495,22 @@ valid JSON, and that the bot is now its own scribe — hence the guardrails belo
 layer changes from one rewritten prose document to a list of short *trait items*, each with
 an id, text, timestamp and the message that produced it. Every change still creates a
 `PersonaVersion` row (source `BotTurn`), so history, diff and revert (§2.4) keep working
-unchanged; the prompt renders the current items as the evolved block. `[OPEN]` — whether to
-keep the periodic prose-rewrite pass as a *consolidation* step (merge, de-duplicate and prune
-the list on the utility model) once it grows. `[DECIDED]` — yes, keep it, as a slow
-consolidation pass over the trait list only (delivery step 3).
+unchanged; the prompt renders the current items as the evolved block. `[DECIDED]` — the
+periodic prose-rewrite pass is kept as a slow *consolidation* pass over the trait list only.
+
+**Trait guardrails (step 3, implemented).** Applied only for a complete, valid envelope, and
+only when `bot.OwnerId == userId` **and** `Bot.EvolutionEnabled` (otherwise the field is not in
+the instructions and is ignored if returned). Retires are applied first (an unknown or inactive
+id is ignored), then adds; each applied change spends the budget of `Turn:MaxTraitChangesPerDay`
+(3, adds + retires per bot, rolling 24 h, counted from items the bot added or retired).
+Adds are refused at `Turn:MaxTraits` (20) active items or over `Turn:MaxTraitsTotalChars`
+(2000) in total until something is retired; a single item is clipped to `Turn:MaxTraitChars`
+(200); an add equal to an active item is skipped. All changes are dropped during
+`Evolution:CooldownHours` after a human edit or revert. Dropped changes are written to
+`LlmInteraction.Notes` (`TraitAddDropped…`, `TraitRetireIgnored…`, `TraitsDropped: cooldown…`),
+never queued. The creator's `chat.completed` carries `traitChanges {added, retired}` for the
+footer line. *Deviation from the brief:* the brief named both the per-item and the total cap
+`Turn:MaxTraitChars`; the total is `Turn:MaxTraitsTotalChars`.
 
 **Guardrails** (the bot now edits itself, so these are not optional):
 
@@ -531,7 +562,7 @@ authored with `dotnet ef`.
 1. Envelope + `reply` streaming + tolerant parsing, `mood` end-to-end. Extraction/evolution
    workers unchanged.
 2. `memories` through the existing pipeline; the extraction worker is removed.
-3. Trait items, `traits` field, guardrails, footer; evolution worker reduced to the
+3. ✅ Trait items, `traits` field, guardrails, footer; evolution worker reduced to the
    consolidation pass.
 4. Remove dead code and the unused watermarks; update §5.3 and §2.4.
 

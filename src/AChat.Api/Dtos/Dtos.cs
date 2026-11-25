@@ -366,6 +366,7 @@ public sealed record InteractionDetailDto
     public string? FinishReason { get; init; }
     public bool Failed { get; init; }
     public string? FailureReason { get; init; }
+    public string? Notes { get; init; }
     public DateTime CreatedAt { get; init; }
 }
 

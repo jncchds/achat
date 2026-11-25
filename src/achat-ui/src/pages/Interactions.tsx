@@ -112,6 +112,7 @@ export default function Interactions() {
                           <pre className="code">{prettyJson(detail.requestBody)}</pre>
                           {detail.reasoning && <><div className="hint" style={{ marginTop: '0.5rem' }}>Reasoning</div><pre className="code">{detail.reasoning}</pre></>}
                           {detail.responseContent && <><div className="hint" style={{ marginTop: '0.5rem' }}>Response</div><pre className="code">{detail.responseContent}</pre></>}
+                          {detail.notes && <><div className="hint" style={{ marginTop: '0.5rem' }}>Notes (envelope side effects)</div><pre className="code">{detail.notes}</pre></>}
                           <div className="hint" style={{ marginTop: '0.5rem' }}>
                             Finish: {detail.finishReason ?? '—'} · Tokens {detail.promptTokens}/{detail.completionTokens}/{detail.totalTokens}
                           </div>

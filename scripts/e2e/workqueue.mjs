@@ -31,8 +31,9 @@ async function api(path, { method = 'GET', body } = {}) {
   return { status: r.status, data }
 }
 
-// One hub round-trip: invoke the method and collect the run's events. The invoke
-// resolves when the run has finished (the hub awaits it), so events are settled.
+// One hub round-trip: invoke the method and collect the run's events. The run is
+// detached from the connection (§4.2), so the invoke returns at once; wait for the
+// terminal chat.completed / chat.failed event.
 async function hubRun(method, botId, content, timeoutMs = 120000) {
   const conn = new HubConnectionBuilder()
     .withUrl(BASE + '/hubs/chat', { accessTokenFactory: () => token })
@@ -40,14 +41,17 @@ async function hubRun(method, botId, content, timeoutMs = 120000) {
     .build()
   const events = { deltas: '', completed: null, failed: null, invokeError: null }
   conn.on('chat.delta', m => { events.deltas += m.delta })
+  conn.on('chat.started', () => {})
   conn.on('chat.completed', m => { events.completed = m })
   conn.on('chat.failed', m => { events.failed = m })
   await conn.start()
   try {
     await Promise.race([
-      content === undefined
-        ? conn.invoke(method, botId)
-        : conn.invoke(method, botId, content),
+      (async () => {
+        if (content === undefined) await conn.invoke(method, botId)
+        else await conn.invoke(method, botId, content)
+        while (!events.completed && !events.failed) await new Promise(r => setTimeout(r, 200))
+      })(),
       new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs)),
     ])
   } catch (e) { events.invokeError = String(e) }

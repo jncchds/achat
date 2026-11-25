@@ -27,3 +27,4 @@ The turn-envelope rework runs as one orchestrator plus one worker session per ta
 - 2026-11-25 T4 (cleanup) brief written; worker started.
 - 2026-11-25 T4 worker `63052e70` finished; merged (DropWatermarks migration, e2e scripts rewritten, phase5.mjs deleted, README/RELEASE_NOTES/design updated). Not run: phase3 (needs real model), phase7-verify, smoke.mjs. Open: human trait add/edit has no count/total cap.
 - 2026-11-25 T5 (real-model e2e, polish, PR description) brief written; worker started.
+- 2026-11-25 T5 part 1 merged (real-envelope.mjs driver, Notes in viewer, pr-description.md put on PR #2). **Pending:** real-model run (worker `6f7ab458` "AChat T5 e2e" kept alive, branch `task/05-e2e-polish` and worktree task-05 kept). LM Studio models are all not-loaded; no OpenRouter key. When the user loads a model, message the worker to run `real-envelope.mjs`, then merge and update the PR body. Known limit: inline `<think>` in content isn't stripped.

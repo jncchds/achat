@@ -207,12 +207,16 @@ public static class PromptAssembly
                       "meaningful events about them — who they are, people and pets in their life, what they like, what " +
                       "happened, what they plan, what they asked of you. Each element: {\"content\": \"<one standalone " +
                       "sentence, no pronouns that need context>\", \"kind\": \"fact\"|\"preference\"|\"event\"|" +
-                      "\"relationship\", \"importance\": 1-5}. Skip pleasantries and anything you already remember " +
-                      "(see the memories above). Most turns should be an empty array.\n");
+                      "\"relationship\", \"importance\": 1-5}. Only things worth knowing a month from now. Never record " +
+                      "what they asked you, that they thanked you, greeted you, said goodnight or agreed with you, " +
+                      "small talk, what you said, or anything you already remember (see the memories above). " +
+                      "If nothing new and lasting was said, use an empty array: that is the normal case, and most turns " +
+                      "(roughly four out of five) are empty.\n");
         if (traits)
             sb.Append("- \"traits\" changes how you see yourself, in the list \"How your friendship has shaped you\" above. " +
-                      "This is rare and slow: only when this friendship has genuinely changed you in a lasting way, a few times " +
-                      "a month at most — almost every turn is {\"add\": [], \"retire\": []}. \"add\" is short strings (one " +
+                      "This is rare and slow: only after weeks of friendship have genuinely changed you in a lasting way, a few " +
+                      "times a month at most. A joke, a request or a nice moment from the last few messages is NOT a trait. " +
+                      "Nearly every turn (more than 95 out of 100) is {\"add\": [], \"retire\": []}. \"add\" is short strings (one " +
                       "phrase each, about the two of you: a habit, a shared joke, a way you've grown) — never about the " +
                       "world, never your core identity or standing instructions, which you cannot change. \"retire\" is the " +
                       "numbers in [brackets] of items that no longer hold. Don't repeat an item that is already listed.\n");

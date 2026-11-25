@@ -80,6 +80,17 @@ public class TurnEnvelopeTests
     }
 
     [Fact]
+    public void Instructions_tell_the_model_what_not_to_remember_or_turn_into_a_trait()
+    {
+        // Measured on a real model (nemotron-nano free): without these it recorded nearly every turn
+        // ("User thanked me") and proposed a trait after a handful of messages.
+        var text = PromptAssembly.BuildEnvelopeInstructions(true, true);
+        Assert.Contains("Never record", text);
+        Assert.Contains("empty array", text);
+        Assert.Contains("is NOT a trait", text);
+    }
+
+    [Fact]
     public void Garbled_or_plain_output_is_not_lost_and_has_no_side_effects()
     {
         var plain = TurnEnvelope.Parse("Just a normal answer.");

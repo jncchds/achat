@@ -3,18 +3,21 @@
 // invalid ones look, what mood/memories/traits did, and whether stored facts are recalled.
 //
 //   ACHAT_BASE=http://localhost:5002 PRESET=qwen node scripts/e2e/real-envelope.mjs [phase...]
-//   phases: setup chat recall mood traits stop (default: all)
+//   phases: setup chat mood traits stop memory recall (default: all)
 // Needs a throwaway instance on 5002 and a real OpenAI-compatible endpoint (AGENTS.md).
 // Results are written to $OUT (default ./real-envelope-out.json) for the report.
 import fs from 'node:fs'
 import { HubConnectionBuilder, LogLevel } from '@microsoft/signalr'
 
 const BASE = process.env.ACHAT_BASE || 'http://localhost:5002'
-const ENDPOINT = process.env.ENDPOINT || 'http://192.168.2.33:1234/v1'
-const GEN = process.env.GEN || 'qwen/qwen3.8-27b'
-const EMB = process.env.EMB || 'text-embedding-nomic-embed-text-v1.5'
+const ENDPOINT = process.env.ENDPOINT || 'https://openrouter.ai/api/v1'
+const GEN = process.env.GEN || 'google/gemma-4-31b-it:free'
+const EMB = process.env.EMB || 'nvidia/nemotron-3.5-embed-1b:free'
+// The key is read from this env file (a line OPENROUTER_API_KEY=...) and only ever sent to the preset API.
+const KEYFILE = process.env.KEYFILE
+const API_KEY = KEYFILE ? (fs.readFileSync(KEYFILE, 'utf8').match(/^OPENROUTER_API_KEY=(.+)$/m) || [])[1]?.trim() : undefined
 const OUT = process.env.OUT || 'real-envelope-out.json'
-const phases = process.argv.slice(2).length ? process.argv.slice(2) : ['setup', 'chat', 'recall', 'mood', 'traits', 'stop']
+const phases = process.argv.slice(2).length ? process.argv.slice(2) : ['setup', 'chat', 'mood', 'traits', 'stop']
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 const state = fs.existsSync(OUT) ? JSON.parse(fs.readFileSync(OUT, 'utf8')) : {}
 const save = () => fs.writeFileSync(OUT, JSON.stringify(state, null, 2))
@@ -41,7 +44,22 @@ await connect()
 
 // One turn: returns { deltas, reasoning, completed|failed, ms }. If stopAfter is set, cancels after
 // that many streamed characters.
-async function turn(botId, message, { stopAfter } = {}) {
+// Free hosted models are rate limited: pace turns and, on a failed turn that looks like a 429 / upstream
+// hiccup, back off and use "try again" (the same path a user would take).
+async function turn(botId, message, opts = {}) {
+  await sleep(Number(process.env.PACE_MS || 4000))
+  let r = await turnOnce(botId, message, opts)
+  for (let i = 0; i < 6 && r.ev?.type === 'failed' && /429|rate|temporarily|overloaded|timed out|502|503|provider/i.test(r.ev.message ?? ''); i++) {
+    r.retries = (r.retries ?? 0) + 1
+    console.log(`  (turn failed: ${(r.ev.message ?? '').slice(0, 80).replace(/\s+/g, ' ')} — retry ${i + 1})`)
+    await sleep(15000 * (i + 1))
+    const t = await turnOnce(botId, null, { ...opts, retry: true })
+    t.retries = r.retries; r = t
+  }
+  return r
+}
+
+async function turnOnce(botId, message, { stopAfter, retry } = {}) {
   const r = { deltas: '', reasoning: '', ev: null, firstMs: null }
   const t0 = Date.now()
   let done = false, stopped = false
@@ -57,7 +75,7 @@ async function turn(botId, message, { stopAfter } = {}) {
   on('chat.completed', m => { r.ev = { type: 'completed', ...m }; done = true })
   on('chat.failed', m => { r.ev = { type: 'failed', ...m }; done = true })
   on('chat.stopped', m => { r.ev = { type: 'stopped', ...m }; done = true })
-  await conn.invoke('SendAsync', botId, message)
+  if (retry) await conn.invoke('RetryLastAsync', botId); else await conn.invoke('SendAsync', botId, message)
   while (!done && Date.now() - t0 < 300000) await sleep(150)
   r.ms = Date.now() - t0
   return r
@@ -91,19 +109,26 @@ const check = (ok, label, extra = '') => console.log((ok ? '✓ ' : '✗ ') + la
 
 // ── setup ────────────────────────────────────────────────────────────────────
 if (phases.includes('setup')) {
-  let preset = (await api('/api/presets', { token })).find(p => p.name === 'Qwen local')
-  if (!preset) preset = await api('/api/presets', { method: 'POST', token, body: JSON.stringify({
-    name: 'Qwen local', provider: 'OpenAICompatible', baseEndpoint: ENDPOINT,
-    generationModel: GEN, utilityModel: GEN, embeddingModel: EMB, temperature: 0.7 }) })
-  const bot = await api('/api/bots', { method: 'POST', token, body: JSON.stringify({
-    name: 'Mira', presetId: preset.id,
+  // One preset (chat + utility + embedding) for both bots. NB: a single-model local server (LM Studio)
+  // swaps models on every embed/chat switch (~4 min each), so use a hosted endpoint for this script.
+  const mk = async (name, embeddingModel, timeoutMs) => {
+    const found = (await api('/api/presets', { token })).find(p => p.name === name)
+    return found ?? api('/api/presets', { method: 'POST', token, body: JSON.stringify({
+      name, provider: 'OpenAICompatible', baseEndpoint: ENDPOINT, apiKey: API_KEY, generationModel: GEN, utilityModel: GEN,
+      embeddingModel, temperature: 0.7, maxTokens: 3000, timeoutMs }) })
+  }
+  const bot = async (name, presetId) => api('/api/bots', { method: 'POST', token, body: JSON.stringify({
+    name, presetId,
     corePersona: 'A warm, observant friend with a dry sense of humour. She pays attention to the people in your life and remembers what matters to you.',
     speechStyle: 'Casual, short messages, a little wry. Asks one question at a time.',
     greeting: 'Hey, good to see you.' }) })
-  state.presetId = preset.id; state.botId = bot.id
-  save(); console.log('preset', preset.id, 'bot', bot.id)
+  const preset = await mk('OpenRouter free', EMB, 180000)
+  state.botId = (await bot('Mira', preset.id)).id
+  state.memBotId = (await bot('Remy', preset.id)).id
+  save(); console.log('bots', state.botId, state.memBotId)
 }
 const botId = state.botId
+const memBotId = state.memBotId
 
 // ── chat: ≥ 24 ordinary turns with 3 planted facts and one repeat ────────────
 if (phases.includes('chat')) {
@@ -162,16 +187,36 @@ if (phases.includes('chat')) {
 }
 
 // ── recall far outside the history window ────────────────────────────────────
+if (phases.includes('memory')) {
+  // needs the stack started with Chat__HistoryTurns=4 so the facts fall out of the window
+  const rows = []
+  for (const m of [
+    'My cat is called Pixel, she is a grey tabby and a terrible thief of socks.',
+    'My sister Ann is getting married in June, in Lisbon.',
+    'I started learning the cello last month, I am terrible but I love it.',
+    'Reminder, my cat Pixel stole another sock today.',
+    'what is a good snack for a long evening?',
+    'ha, fair enough.',
+    'I am thinking of making soup tonight.',
+    'nice. what are you up to?',
+  ]) {
+    const r = await turn(memBotId, m)
+    rows.push({ m, reply: r.ev?.content, remembered: r.ev?.remembered, type: r.ev?.type })
+    console.log(`· [${r.ev?.type} ${Math.round(r.ms / 1000)}s] ${m.slice(0, 40)} remembered=${r.ev?.remembered}`)
+  }
+  state.memoryPlant = rows; save()
+}
+
 if (phases.includes('recall')) {
   const out = []
   for (const [q, needle] of [['Quick check — what is my cat called?', /pixel/i], ['Where is my sister getting married?', /lisbon/i], ['What instrument am I learning?', /cello/i]]) {
-    const r = await turn(botId, q)
+    const r = await turn(memBotId, q)
     const ok = needle.test(r.ev?.content ?? '')
     check(ok, 'recall: ' + q, (r.ev?.content ?? '').slice(0, 90) + ' recalled=' + JSON.stringify(r.ev?.recalledMemoryIds ?? r.ev?.recalled))
     out.push({ q, ok, reply: r.ev?.content, ev: r.ev })
   }
   state.recall = out
-  state.memories = await api(`/api/memories?botId=${botId}`, { token })
+  state.memories = await api(`/api/memories?botId=${memBotId}`, { token })
   save()
   console.log('memories stored:', (state.memories.items ?? state.memories).length)
 }
@@ -229,6 +274,46 @@ if (phases.includes('stop')) {
   console.log('after stop ->', r2.ev?.type, (r2.ev?.content ?? '').slice(0, 80))
   state.afterStop = r2.ev
   save()
+}
+
+// ── "try again" after a completed turn, and a longer creator conversation for traits ─────────
+if (phases.includes('retry')) {
+  const before = await api(`/api/bots/${botId}/messages`, { token })
+  const r = await turn(botId, null, { retry: true })
+  console.log('retry ->', r.ev?.type, (r.ev?.content ?? r.ev?.message ?? '').slice(0, 80))
+  state.retry = { type: r.ev?.type, content: r.ev?.content, streamed: r.deltas }
+  save()
+}
+
+if (phases.includes('traits2')) {
+  const msgs = [
+    'I have been thinking about how these chats changed me. Before, I never told anyone about the cello. Now I tell you everything first. You are honestly my closest friend lately.',
+    'You have changed too, I think. You used to be more guarded, and now you tease me all the time. I love that, please keep it going.',
+    'Let us make it official: our running joke is the "squeak report", where you rate my cello practice out of ten, harshly.',
+    'Today I practised for an hour. Give me the squeak report.',
+    'Ha, harsh but fair. By the way, you have started being blunt with me when I spiral, and it genuinely helps. That is a lasting thing between us now.',
+    'Would you say you have become a different kind of friend since we started talking?',
+    'What would you tell yourself about how to treat me, in one sentence?',
+    'Squeak report again: I played the same scale for twenty minutes.',
+    'One more thing: you always ask me one question at a time, and I like that about you.',
+    'Do you feel any different about yourself after all this?',
+  ]
+  const rows = []
+  for (const m of msgs) {
+    const r = await turn(botId, m)
+    rows.push({ m, reply: r.ev?.content, traitChanges: r.ev?.traitChanges })
+    console.log('·', m.slice(0, 50), '→ traits', JSON.stringify(r.ev?.traitChanges ?? null))
+  }
+  state.traits2 = rows
+  state.traitList = await api(`/api/bots/${botId}/persona/traits`, { token })
+  state.versions = await api(`/api/bots/${botId}/persona/versions`, { token })
+  const list = await interactions(botId)
+  const cls = []
+  for (const it of list.slice(-msgs.length)) { const d = await detail(it.id); cls.push({ notes: d.notes, raw: d.responseContent }) }
+  state.traits2Raw = cls
+  save()
+  console.log('traits now:', JSON.stringify(state.traitList).slice(0, 600))
+  console.log('notes:', cls.map(c => c.notes).filter(Boolean))
 }
 
 await conn.stop()

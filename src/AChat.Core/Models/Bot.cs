@@ -50,13 +50,6 @@ public class Bot
     public bool ShowThinking { get; set; }
 
     /// <summary>
-    /// Watermark for evolution (§2.4): the highest message Id (across the
-    /// creator's conversations) already considered by a completed evolution pass.
-    /// Null = nothing processed yet. Only the creator's messages count.
-    /// </summary>
-    public int? EvolutionUpToMessageId { get; set; }
-
-    /// <summary>
     /// Kill switch (§12a, §2.5). When true, every LLM call for this bot is refused
     /// with a clear notice — an immediate way for the creator to stop the bot from
     /// consuming their key (e.g. after a runaway conversation or a bill spike).

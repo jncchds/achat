@@ -90,9 +90,6 @@ namespace AChat.Infrastructure.Migrations
                         .HasColumnType("boolean")
                         .HasDefaultValue(true);
 
-                    b.Property<int?>("EvolutionUpToMessageId")
-                        .HasColumnType("integer");
-
                     b.Property<string>("Greeting")
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)");
@@ -254,11 +251,6 @@ namespace AChat.Infrastructure.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("ExtractionUpToMessageId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasDefaultValue(0);
 
                     b.Property<DateTime?>("LastMessageAt")
                         .HasColumnType("timestamp with time zone");

@@ -1,7 +1,7 @@
 // Phase 6 E2E: sharing — a second user requests access, is approved, and holds a
 // conversation with a separate memory scope the first user cannot see (§2.5).
+// Uses the mock LLM on 18999 (a [[remember:TEXT]] marker makes the bot remember it, §4.7).
 const BASE = process.env.ACHAT_BASE || 'http://localhost:5002'
-const PRESET = parseInt(process.env.PHASE6_PRESET || '3', 10)
 const FRIEND = process.env.PHASE6_FRIEND || 'friend'
 const FRIEND_PASS = 'friendpass123'
 const BOT_NAME = process.env.PHASE6_BOT || 'Shared'
@@ -44,14 +44,18 @@ const check = (ok, label, extra = '') => {
 const ownerLogin = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'admin', password: 'admin', timezone: 'Europe/Moscow' }) })
 const owner = ownerLogin.token
 
-// ── a bot on a working preset ────────────────────────────────────────────────
+// ── a bot on the mock preset ─────────────────────────────────────────────────
+let preset = (await api('/api/presets', { token: owner })).find(p => p.name === 'Mock')
+if (!preset) preset = await api('/api/presets', { method: 'POST', token: owner, body: JSON.stringify({
+  name: 'Mock', provider: 'OpenAICompatible', baseEndpoint: 'http://host.docker.internal:18999/v1',
+  generationModel: 'mock-model', utilityModel: 'mock-model-small', embeddingModel: 'mock-embed', temperature: 0.7 }) })
 const bots = await api('/api/bots', { token: owner })
 let bot = bots.find(b => b.name === BOT_NAME)
 if (!bot) {
   bot = await api('/api/bots', {
     method: 'POST', token: owner,
     body: JSON.stringify({
-      name: BOT_NAME, presetId: PRESET,
+      name: BOT_NAME, presetId: preset.id,
       corePersona: 'A warm, easygoing friend who remembers the little things.',
       speechStyle: 'Casual, friendly.',
       greeting: 'Hey, good to see you!',
@@ -108,7 +112,7 @@ if (seen) {
 }
 
 // ── friend holds a conversation ─────────────────────────────────────────────
-const msg1 = 'Hi! Quick thing — my cat is called Miso.'
+const msg1 = 'Hi! Quick thing — my cat is called Miso. [[remember:The user\'s cat is called Miso.]]'
 const c1 = await chat(friend, bot.id, msg1)
 check(!!c1.content, 'friend can chat with the shared bot')
 await sleep(1500)
@@ -124,19 +128,10 @@ const ownerMsgs = await api(`/api/bots/${bot.id}/messages`, { token: owner })
 check(!ownerMsgs.some(m => /Miso/i.test(m.content)), 'owner does NOT see the friend\'s messages (separate scope)')
 
 // ── memory scoping (§2.5): the friend's memories are not the owner's ────────
-// Extraction is best-effort (needs the utility model); if it lands, verify scope.
-let friendMems = []
-for (let i = 0; i < 20; i++) {
-  await sleep(5000)
-  friendMems = await api(`/api/memories?botId=${bot.id}`, { token: friend }) || []
-  if (friendMems.some(m => /miso/i.test(m.content))) break
-}
-if (friendMems.some(m => /miso/i.test(m.content))) {
-  const ownerMems = await api(`/api/memories?botId=${bot.id}`, { token: owner }) || []
-  check(!ownerMems.some(m => /miso/i.test(m.content)), 'owner does NOT see the friend\'s memories (per-user scope)')
-} else {
-  console.log('· (memory extraction did not land in time — per-user scope is covered by unit tests)')
-}
+const friendMems = await api(`/api/memories?botId=${bot.id}`, { token: friend }) || []
+check(friendMems.some(m => /miso/i.test(m.content)), 'the friend\'s memory was stored from the envelope')
+const ownerMems = await api(`/api/memories?botId=${bot.id}`, { token: owner }) || []
+check(!ownerMems.some(m => /miso/i.test(m.content)), 'owner does NOT see the friend\'s memories (per-user scope)')
 
 console.log(failures === 0 ? '\nPHASE 6 E2E: PASS' : `\nPHASE 6 E2E: FAIL (${failures})`)
 process.exit(failures === 0 ? 0 : 1)

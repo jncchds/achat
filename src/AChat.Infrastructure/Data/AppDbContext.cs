@@ -121,7 +121,6 @@ public class AppDbContext : DbContext, IDataProtectionKeyContext
             c.ToTable("Conversations");
             c.HasIndex(x => new { x.BotId, x.UserId }).IsUnique();
             c.Property(x => x.LastMessageAt);
-            c.Property(x => x.ExtractionUpToMessageId).HasDefaultValue(0);
             c.Property(x => x.Mood).HasMaxLength(200);
             c.Property(x => x.MoodChangedAtMessageId).HasDefaultValue(0);
             c.HasOne(x => x.Bot).WithMany().HasForeignKey(x => x.BotId).OnDelete(DeleteBehavior.Cascade);

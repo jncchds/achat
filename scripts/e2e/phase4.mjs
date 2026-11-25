@@ -1,5 +1,6 @@
-// Phase 4 E2E: memory extraction → retrieval → viewer → embedding lock.
-// Runs against a throwaway instance with fast extraction triggers.
+// Phase 4 E2E: bot-written memories (turn envelope, §4.7) → retrieval → viewer → embedding lock.
+// Runs against a throwaway instance on 5002 with the mock LLM on 18999 (mockllm.mjs turns a
+// [[remember:TEXT]] marker in the user's message into an envelope `memories` entry).
 const BASE = process.env.ACHAT_BASE || 'http://localhost:5002'
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
@@ -40,6 +41,10 @@ const check = (ok, label, extra = '') => {
 const login = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'admin', password: 'admin', timezone: 'Europe/Moscow' }) })
 const token = login.token
 
+let preset = (await api('/api/presets', { token })).find(p => p.name === 'Mock')
+if (!preset) preset = await api('/api/presets', { method: 'POST', token, body: JSON.stringify({
+  name: 'Mock', provider: 'OpenAICompatible', baseEndpoint: 'http://host.docker.internal:18999/v1',
+  generationModel: 'mock-model', utilityModel: 'mock-model-small', embeddingModel: 'mock-embed', temperature: 0.7 }) })
 const botName = process.env.PHASE4_BOT || 'Memo'
 const bots = await api('/api/bots', { token })
 let bot = bots.find(b => b.name === botName)
@@ -47,7 +52,7 @@ if (!bot) {
   bot = await api('/api/bots', {
     method: 'POST', token,
     body: JSON.stringify({
-      name: botName, presetId: 1,
+      name: botName, presetId: preset.id,
       corePersona: 'A warm, attentive friend who remembers details.',
       speechStyle: 'Casual, kind.',
       greeting: 'Hey! How are you?',
@@ -58,8 +63,8 @@ console.log('bot:', bot.id, bot.name)
 
 // ── plant durable facts ──────────────────────────────────────────────────────
 const turns = [
-  'Quick one: my dog is named Biscuit. He is a golden retriever.',
-  'Oh, and I really love oat milk — I put it in everything.',
+  'Quick one: my dog is named Biscuit. He is a golden retriever. [[remember:The user\'s dog is named Biscuit, a golden retriever.]]',
+  'Oh, and I really love oat milk — I put it in everything. [[remember:The user loves oat milk.]]',
   'Last thing: I start a new job on Monday at a bookstore.',
   'Anyway — how is your day going?',
   'Tell me something fun that happened to you recently.',
@@ -74,21 +79,16 @@ for (const t of turns) {
   await sleep(2000)
 }
 
-// ── wait for the extraction worker to cover the planted facts ────────────────
-let mems = []
-for (let i = 0; i < 40; i++) {
-  await sleep(5000)
-  mems = await api(`/api/memories?botId=${bot.id}`, { token }) || []
-  if (mems.some(m => /biscuit/i.test(m.content)) && mems.some(m => /oat/i.test(m.content))) break
-}
-check(mems.length >= 1, `extraction produced memories (${mems.length})`, mems.map(m => m.content.slice(0, 40)).join(' | ').slice(0, 160))
+// ── the bot's envelope memories are stored in the turn itself (no background pass) ──
+const mems = await api(`/api/memories?botId=${bot.id}`, { token }) || []
+check(mems.some(m => /biscuit/i.test(m.content)) && mems.some(m => /oat/i.test(m.content)),
+  `envelope memories stored (${mems.length})`, mems.map(m => m.content.slice(0, 40)).join(' | ').slice(0, 160))
+check(mems.every(m => m.source === 'BotRemember'), 'memories are sourced BotRemember', [...new Set(mems.map(m => m.source))].join(','))
 
 // ── retrieval: ask about a planted fact in a later turn ──────────────────────
 await sleep(3000)
 const recall = await chat(token, bot.id, 'Right — what is my dog called, and what milk do I like?')
 console.log('── recall answer ──', recall.content.slice(0, 160))
-const recallOk = /biscuit/i.test(recall.content) && /oat/i.test(recall.content)
-check(recallOk, 'bot recalled planted facts (dog + milk)')
 
 // ── the turn must have recalled memories (interaction log) ───────────────────
 const inter = await api('/api/interactions?take=1', { token })
@@ -98,6 +98,7 @@ check(last && true, `latest chat interaction #${last?.id}`)
 const detail = await api(`/api/interactions/${last.id}`, { token })
 const recalledIds = detail.recalledMemoryIds ? JSON.parse(detail.recalledMemoryIds) : []
 check(recalledIds.length > 0, `interaction recorded recalled memory ids: [${recalledIds}]`)
+check(/biscuit/i.test(detail.requestBody) && /oat milk/i.test(detail.requestBody), 'recalled facts (dog + milk) are in the prompt sent to the model')
 
 // ── viewer API: edit, pin, forget ───────────────────────────────────────────
 const dogMem = mems.find(m => /biscuit/i.test(m.content))
@@ -118,9 +119,9 @@ if (dogMem) {
 // ── embedding model lock (§5.7): changing it while a bot uses the preset ─────
 let lockOk = false, lockMsg = ''
 try {
-  await api('/api/presets/1', { method: 'PUT', token, body: JSON.stringify({
-    name: 'Qwen local', provider: 'OpenAICompatible', baseEndpoint: 'http://192.168.2.33:1234/v1',
-    generationModel: 'qwen/qwen3.8-27b', utilityModel: null,
+  await api(`/api/presets/${preset.id}`, { method: 'PUT', token, body: JSON.stringify({
+    name: 'Mock', provider: 'OpenAICompatible', baseEndpoint: 'http://host.docker.internal:18999/v1',
+    generationModel: 'mock-model', utilityModel: 'mock-model-small',
     embeddingModel: 'some-other-model', temperature: 0.7,
   })})
 } catch (e) {

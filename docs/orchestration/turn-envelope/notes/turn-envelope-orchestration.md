@@ -23,3 +23,5 @@ The turn-envelope rework runs as one orchestrator plus one worker session per ta
 - 2026-11-25 T1 merged directly by the orchestrator (`bf4ce22`): envelope + reply streaming + mood.
 - 2026-11-25 T2 merged directly (`5ef0c57`): bot memories through `MemoryWriter`; extraction worker removed.
 - 2026-11-25 series set up; T3 (traits) brief written.
+- 2026-11-25 T3 worker `7c43c559` (AChat T3 traits) finished; merged `35aa642` (traits table + snapshots, envelope traits, guardrails, consolidation pass, personality list UI, `scripts/e2e/traits.mjs`). Deviation: total-chars cap named `Turn:MaxTraitsTotalChars`. Open for T4: obsolete phase5/phase5-mock/workqueue e2e scripts, unused watermarks.
+- 2026-11-25 T4 (cleanup) brief written; worker started.

@@ -454,7 +454,13 @@ valid JSON, and that the bot is now its own scribe — hence the guardrails belo
 - **`mood`** — the bot's own current state toward this person (e.g. "playful", "worried
   about her exam"). Stored on the `Conversation` (per `(bot, user)`, like everything
   relational), injected into the next prompt right after the time line, and shown in the UI.
-  It is *state, not personality*: it may change every turn and is never versioned. Capped in
+  It is *state, not personality*, and it is never versioned — but it must **not swing**: it
+  is a natural consequence of the conversation, a slow-moving undercurrent, not a per-message
+  reaction. The prompt says so (keep the current mood unless something in the conversation
+  genuinely shifted it; most turns return null) and shows the model how long the current mood
+  has held. The server damps it too: a change is accepted only if at least
+  `Turn:MoodMinTurns` (default 6) turns **and** `Turn:MoodMinMinutes` (default 30) have passed
+  since the last one; earlier changes are dropped and noted on the interaction. Capped in
   length; null means unchanged, empty string clears it.
 - **`memories`** — things worth remembering, same fields as extraction candidates (§5.3).
   Written through the **existing pipeline**: embed, dedupe/supersede against the scope,
@@ -472,7 +478,8 @@ an id, text, timestamp and the message that produced it. Every change still crea
 `PersonaVersion` row (source `BotTurn`), so history, diff and revert (§2.4) keep working
 unchanged; the prompt renders the current items as the evolved block. `[OPEN]` — whether to
 keep the periodic prose-rewrite pass as a *consolidation* step (merge, de-duplicate and prune
-the list on the utility model) once it grows; recommended, but not needed to ship the envelope.
+the list on the utility model) once it grows. `[DECIDED]` — yes, keep it, as a slow
+consolidation pass over the trait list only (delivery step 3).
 
 **Guardrails** (the bot now edits itself, so these are not optional):
 
@@ -504,8 +511,7 @@ is a failure as today (retryable, §12b). Stop mid-stream persists the partial `
 only — side effects are applied only for a complete envelope.
 
 **What goes away, in order.** Memory extraction: the envelope's `memories` replace the
-worker; the pass may stay behind a config switch (`Extraction:Enabled`, default off) as a
-catch-up for bots on weak models. Persona evolution: `traits` replaces the worker, the prose
+worker, which is **removed outright** (no fallback switch). Persona evolution: `traits` replaces the worker, the prose
 rewrite survives only as the optional consolidation above. Summarisation: unchanged.
 The `ExtractionUpToMessageId` and `Bot.EvolutionUpToMessageId` watermarks become unused.
 
@@ -524,9 +530,9 @@ authored with `dotnet ef`.
 
 1. Envelope + `reply` streaming + tolerant parsing, `mood` end-to-end. Extraction/evolution
    workers unchanged.
-2. `memories` through the existing pipeline; extraction worker off by default.
-3. Trait items, `traits` field, guardrails, footer; evolution worker reduced to optional
-   consolidation.
+2. `memories` through the existing pipeline; the extraction worker is removed.
+3. Trait items, `traits` field, guardrails, footer; evolution worker reduced to the
+   consolidation pass.
 4. Remove dead code and the unused watermarks; update §5.3 and §2.4.
 
 *Done when*: a turn streams its reply live while the bot sets its mood, records a memory

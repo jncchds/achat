@@ -16,6 +16,12 @@ public enum PersonaVersionSource
 
     /// <summary>A revert to an older version, by the bot admin.</summary>
     Revert = 3,
+
+    /// <summary>The bot changed its own traits from inside a turn (§4.7).</summary>
+    BotTurn = 4,
+
+    /// <summary>The slow consolidation pass merged the trait list.</summary>
+    Consolidation = 5,
 }
 
 /// <summary>
@@ -34,6 +40,13 @@ public class PersonaVersion
 
     /// <summary>The evolved-traits document. Empty for the Initial baseline.</summary>
     public string Content { get; set; } = "";
+
+    /// <summary>
+    /// JSON snapshot of the active trait items at this version, <c>[{"id":1,"text":"…"}]</c>
+    /// (null on versions written before the trait list existed — their <see cref="Content"/>
+    /// is then read as one legacy item). A revert restores the active set from it.
+    /// </summary>
+    public string? Snapshot { get; set; }
 
     public PersonaVersionSource Source { get; set; }
 

@@ -207,6 +207,40 @@ namespace AChat.Infrastructure.Migrations
                     b.ToTable("BotDirectives", (string)null);
                 });
 
+            modelBuilder.Entity("AChat.Core.Models.BotTrait", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("BotId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("RetiredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("RetiredByMessageId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("SourceMessageId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BotId", "RetiredAt");
+
+                    b.ToTable("BotTraits", (string)null);
+                });
+
             modelBuilder.Entity("AChat.Core.Models.Conversation", b =>
                 {
                     b.Property<int>("Id")
@@ -575,6 +609,9 @@ namespace AChat.Infrastructure.Migrations
                     b.Property<int?>("InteractionId")
                         .HasColumnType("integer");
 
+                    b.Property<string>("Snapshot")
+                        .HasColumnType("text");
+
                     b.Property<int>("Source")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
@@ -769,6 +806,17 @@ namespace AChat.Infrastructure.Migrations
                 });
 
             modelBuilder.Entity("AChat.Core.Models.BotDirective", b =>
+                {
+                    b.HasOne("AChat.Core.Models.Bot", "Bot")
+                        .WithMany()
+                        .HasForeignKey("BotId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Bot");
+                });
+
+            modelBuilder.Entity("AChat.Core.Models.BotTrait", b =>
                 {
                     b.HasOne("AChat.Core.Models.Bot", "Bot")
                         .WithMany()

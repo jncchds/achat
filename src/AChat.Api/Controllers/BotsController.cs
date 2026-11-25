@@ -1,4 +1,5 @@
 using AChat.Api.Dtos;
+using AChat.Api.Services;
 using AChat.Core.Models;
 using AChat.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
@@ -15,7 +16,7 @@ namespace AChat.Api.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/bots")]
-public class BotsController(AppDbContext db) : ControllerBase
+public class BotsController(AppDbContext db, IConfiguration? config = null) : ControllerBase
 {
     private int _userId => int.Parse(User.FindFirst("sub")!.Value);
 
@@ -96,6 +97,7 @@ public class BotsController(AppDbContext db) : ControllerBase
         {
             BotId = bot.Id,
             Content = "",
+            Snapshot = "[]",
             Source = PersonaVersionSource.Initial,
             CreatedAt = DateTime.UtcNow,
         });
@@ -280,79 +282,103 @@ public class BotsController(AppDbContext db) : ControllerBase
         return NoContent();
     }
 
-    // ── Evolved traits: versioned layer (§2.4) — history, edit, revert ────────
+    // ── Evolved traits: a list of short items, versioned (§2.4) ──────────────
+
+    private static PersonaVersionDto ToVersionDto(PersonaVersion v) => new()
+    {
+        Id = v.Id, Content = v.Content, Source = v.Source,
+        InteractionId = v.InteractionId, CreatedAt = v.CreatedAt,
+        Items = PersonaTraits.ItemsOf(v).Select(i => new TraitDto { Id = i.Id, Text = i.Text }).ToList(),
+    };
 
     [HttpGet("{id:int}/persona/versions")]
     public async Task<ActionResult<IReadOnlyList<PersonaVersionDto>>> ListPersonaVersions(int id)
     {
         var bot = await _OwnedBotAsync(id);
         if (bot is null) return NotFound();
+        await PersonaTraits.EnsureLegacyAsync(db, id);
         var rows = await db.PersonaVersions
             .Where(v => v.BotId == id)
             .OrderBy(v => v.Id)
             .ToListAsync();
-        return Ok(rows.Select(v => new PersonaVersionDto
-        {
-            Id = v.Id, Content = v.Content, Source = v.Source,
-            InteractionId = v.InteractionId, CreatedAt = v.CreatedAt,
-        }).ToList());
+        return Ok(rows.Select(ToVersionDto).ToList());
     }
 
-    /// <summary>
-    /// Edit the current evolved-traits layer. Appends a new version flagged
-    /// UserEdited — the next evolution pass treats it as the new baseline and
-    /// never overwrites the correction (§2.4). Empty content clears the layer.
-    /// </summary>
-    [HttpPut("{id:int}/persona")]
-    public async Task<ActionResult<PersonaVersionDto>> EditPersona(int id, PersonaEditRequest req)
+    /// <summary>The active trait items — the current evolved layer.</summary>
+    [HttpGet("{id:int}/persona/traits")]
+    public async Task<ActionResult<IReadOnlyList<TraitDto>>> ListTraits(int id)
     {
         var bot = await _OwnedBotAsync(id);
         if (bot is null) return NotFound();
+        var items = await PersonaTraits.ActiveAsync(db, id);
+        return Ok(items.Select(i => new TraitDto { Id = i.Id, Text = i.Text }).ToList());
+    }
 
-        var version = new PersonaVersion
-        {
-            BotId = id,
-            Content = req.Content.Trim(),
-            Source = PersonaVersionSource.UserEdited,
-            CreatedAt = DateTime.UtcNow,
-        };
-        db.PersonaVersions.Add(version);
+    /// <summary>Add an item by hand. Appends a UserEdited version, which also arms the cooldown (§2.4).</summary>
+    [HttpPost("{id:int}/persona/traits")]
+    public async Task<ActionResult<PersonaVersionDto>> AddTrait(int id, TraitRequest req)
+    {
+        var bot = await _OwnedBotAsync(id);
+        if (bot is null) return NotFound();
+        var text = req.Text.Trim();
+        var max = (config?.GetValue("Turn:MaxTraitChars", 200) ?? 200);
+        if (text.Length == 0) return BadRequest(new { message = "The trait is empty." });
+        if (text.Length > max) return BadRequest(new { message = $"A trait is at most {max} characters." });
+        await PersonaTraits.EnsureLegacyAsync(db, id);
+        db.BotTraits.Add(new BotTrait { BotId = id, Text = text, CreatedAt = DateTime.UtcNow });
         await db.SaveChangesAsync();
-        return Ok(new PersonaVersionDto
-        {
-            Id = version.Id, Content = version.Content, Source = version.Source,
-            InteractionId = version.InteractionId, CreatedAt = version.CreatedAt,
-        });
+        return Ok(ToVersionDto(await PersonaTraits.RecordVersionAsync(db, id, PersonaVersionSource.UserEdited)));
+    }
+
+    /// <summary>Edit an item's text. Appends a UserEdited version.</summary>
+    [HttpPut("{id:int}/persona/traits/{tid:int}")]
+    public async Task<ActionResult<PersonaVersionDto>> EditTrait(int id, int tid, TraitRequest req)
+    {
+        var bot = await _OwnedBotAsync(id);
+        if (bot is null) return NotFound();
+        await PersonaTraits.EnsureLegacyAsync(db, id);
+        var row = await db.BotTraits.FirstOrDefaultAsync(t => t.Id == tid && t.BotId == id && t.RetiredAt == null);
+        if (row is null) return NotFound();
+        var text = req.Text.Trim();
+        var max = (config?.GetValue("Turn:MaxTraitChars", 200) ?? 200);
+        if (text.Length == 0) return BadRequest(new { message = "The trait is empty — remove it instead." });
+        if (text.Length > max && text != row.Text) return BadRequest(new { message = $"A trait is at most {max} characters." });
+        row.Text = text;
+        await db.SaveChangesAsync();
+        return Ok(ToVersionDto(await PersonaTraits.RecordVersionAsync(db, id, PersonaVersionSource.UserEdited)));
+    }
+
+    /// <summary>Retire an item (it stays in the history and can be restored by a revert).</summary>
+    [HttpDelete("{id:int}/persona/traits/{tid:int}")]
+    public async Task<ActionResult<PersonaVersionDto>> RetireTrait(int id, int tid)
+    {
+        var bot = await _OwnedBotAsync(id);
+        if (bot is null) return NotFound();
+        await PersonaTraits.EnsureLegacyAsync(db, id);
+        var row = await db.BotTraits.FirstOrDefaultAsync(t => t.Id == tid && t.BotId == id && t.RetiredAt == null);
+        if (row is null) return NotFound();
+        row.RetiredAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        return Ok(ToVersionDto(await PersonaTraits.RecordVersionAsync(db, id, PersonaVersionSource.UserEdited)));
     }
 
     /// <summary>
-    /// Revert to an earlier version. Appends a new version carrying that version's
-    /// content (Source = Revert) — the history stays intact and the revert itself
-    /// is visible in it (§2.4).
+    /// Revert to an earlier version: the active set is restored from that version's
+    /// snapshot and the revert itself is a new version (Source = Revert) — the history
+    /// stays intact (§2.4).
     /// </summary>
     [HttpPost("{id:int}/persona/versions/{vid:int}/revert")]
     public async Task<ActionResult<PersonaVersionDto>> RevertPersona(int id, int vid)
     {
         var bot = await _OwnedBotAsync(id);
         if (bot is null) return NotFound();
+        await PersonaTraits.EnsureLegacyAsync(db, id);
 
         var target = await db.PersonaVersions.FirstOrDefaultAsync(v => v.Id == vid && v.BotId == id);
         if (target is null) return NotFound();
 
-        var version = new PersonaVersion
-        {
-            BotId = id,
-            Content = target.Content,
-            Source = PersonaVersionSource.Revert,
-            CreatedAt = DateTime.UtcNow,
-        };
-        db.PersonaVersions.Add(version);
-        await db.SaveChangesAsync();
-        return Ok(new PersonaVersionDto
-        {
-            Id = version.Id, Content = version.Content, Source = version.Source,
-            InteractionId = version.InteractionId, CreatedAt = version.CreatedAt,
-        });
+        await PersonaTraits.RestoreAsync(db, id, target);
+        return Ok(ToVersionDto(await PersonaTraits.RecordVersionAsync(db, id, PersonaVersionSource.Revert)));
     }
 
     [HttpDelete("{id:int}")]

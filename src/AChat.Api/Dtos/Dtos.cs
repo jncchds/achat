@@ -189,11 +189,19 @@ public sealed record PersonaVersionDto
     public PersonaVersionSource Source { get; init; }
     public int? InteractionId { get; init; }
     public DateTime CreatedAt { get; init; }
+    /// <summary>The active trait items at this version (§2.4).</summary>
+    public IReadOnlyList<TraitDto> Items { get; init; } = [];
 }
 
-public sealed record PersonaEditRequest
+public sealed record TraitDto
 {
-    public string Content { get; init; } = "";
+    public int Id { get; init; }
+    public string Text { get; init; } = "";
+}
+
+public sealed record TraitRequest
+{
+    public string Text { get; init; } = "";
 }
 
 public sealed record MemoryDto
@@ -358,6 +366,7 @@ public sealed record InteractionDetailDto
     public string? FinishReason { get; init; }
     public bool Failed { get; init; }
     public string? FailureReason { get; init; }
+    public string? Notes { get; init; }
     public DateTime CreatedAt { get; init; }
 }
 

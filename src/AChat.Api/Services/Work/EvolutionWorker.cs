@@ -7,13 +7,10 @@ using Microsoft.EntityFrameworkCore;
 namespace AChat.Api.Services;
 
 /// <summary>
-/// Arms evolution work (§12b): re-evaluates the trigger — enough <b>creator</b>
-/// messages accumulated since the last pass (<c>Evolution:MinNewMessages</c>) AND
-/// the cooldown has elapsed (<c>Evolution:CooldownHours</c>) — and upserts a
-/// <see cref="WorkItem"/> for the bot's creator conversation (unique per bot,
-/// §2.3). No LLM work happens here.
-///
-/// Deliberately slow: personality that shifts hourly is noise, not character.
+/// Arms consolidation work (§2.4, §12b): a bot whose active trait list has grown past
+/// <c>Turn:ConsolidateAbove</c> items AND whose newest persona version (any source) is
+/// older than <c>Evolution:CooldownHours</c> gets a <see cref="WorkItem"/> on its
+/// creator conversation (unique per bot, §2.3). No message watermarks. No LLM work here.
 /// </summary>
 public sealed class EvolutionProducer : IWorkProducer
 {
@@ -29,27 +26,25 @@ public sealed class EvolutionProducer : IWorkProducer
 
     public async Task ProduceAsync(AppDbContext db, CancellationToken ct)
     {
-        var minNewMessages = _config.GetValue("Evolution:MinNewMessages", 40);
-        var cooldownHours = _config.GetValue("Evolution:CooldownHours", 12);
-
-        var now = DateTime.UtcNow;
-        var cooldownCutoff = now.AddHours(-cooldownHours);
+        var above = _config.GetValue("Turn:ConsolidateAbove", 12);
+        var cooldownCutoff = DateTime.UtcNow.AddHours(-_config.GetValue("Evolution:CooldownHours", 12));
 
         var bots = await db.Bots
             .AsNoTracking()
             .Where(b => b.EvolutionEnabled)
-            .Select(b => new { b.Id, b.OwnerId, b.EvolutionUpToMessageId })
+            .Select(b => new { b.Id, b.OwnerId })
             .ToListAsync(ct);
 
         foreach (var bot in bots)
         {
-            // The creator's conversation is unique per bot (§2.3) — it is the
-            // work item's target.
+            var activeCount = await db.BotTraits.CountAsync(t => t.BotId == bot.Id && t.RetiredAt == null, ct);
+            if (activeCount <= above) continue; // cheap check first (legacy prose is one item at most)
+
             var convId = await db.Conversations
                 .Where(c => c.BotId == bot.Id && c.UserId == bot.OwnerId)
                 .Select(c => c.Id)
                 .FirstOrDefaultAsync(ct);
-            if (convId == 0) continue; // no relationship yet — nothing to evolve from
+            if (convId == 0) continue;
 
             // A preset that cannot generate is a configuration state, not a failure.
             var canGenerate = await db.Bots
@@ -58,16 +53,10 @@ public sealed class EvolutionProducer : IWorkProducer
                 .FirstOrDefaultAsync(ct);
             if (!canGenerate) continue;
 
-            // How many creator messages since the last completed pass?
-            var newCount = await db.Messages
-                .CountAsync(m => m.ConversationId == convId
-                    && m.Id > (bot.EvolutionUpToMessageId ?? 0), ct);
-
             var lastVersionAt = await db.PersonaVersions
                 .Where(v => v.BotId == bot.Id)
                 .MaxAsync(v => (DateTime?)v.CreatedAt, ct);
-            if (!EvolutionHandler.ShouldEvolve(newCount, lastVersionAt, minNewMessages, cooldownCutoff))
-                continue;
+            if (!PersonaTraits.ShouldConsolidate(activeCount, above, lastVersionAt, cooldownCutoff)) continue;
 
             await WorkQueue.UpsertAsync(db, Kind, convId, MaxAttempts, ct);
         }
@@ -75,25 +64,16 @@ public sealed class EvolutionProducer : IWorkProducer
 }
 
 /// <summary>
-/// Personality-evolution pass (§2.4, executed by the durable queue per §12b).
-/// Maintains the evolved-traits layer — a short machine-written document
-/// describing how the friendship has shaped the bot. Reads only the creator's
-/// conversation — other users' interactions never influence it.
-///
-/// Bounded: the rewrite is prompted with core + directives as fixed constraints
-/// and produces only the evolved layer. Every version is stored (versioning is
-/// required, not optional — the admin can read the history and revert); a human
-/// edit or revert appends a new version and becomes the next pass's baseline.
-///
-/// Runs on the utility model and is logged to §4.4 with purpose
-/// <see cref="InteractionPurpose.PersonaEvolution"/>. The watermark advances only
-/// on success; a failed pass leaves it untouched so the same tail retries (now
-/// with backoff and a cap, §12b).
+/// Trait consolidation (§2.4, executed by the durable queue per §12b). The bot's own
+/// turns add and retire trait items (§4.7); this slow pass rewrites a long list into
+/// fewer, merged, de-duplicated items. It never touches core or directives (passed as
+/// constraints) and reads no conversation. Runs on the utility model, logged to §4.4
+/// as <see cref="InteractionPurpose.PersonaEvolution"/>, stored as a
+/// <see cref="PersonaVersionSource.Consolidation"/> version. The result must be a
+/// non-empty JSON array of strings, otherwise the pass fails and retries (§12b).
 /// </summary>
 public sealed class EvolutionHandler : IWorkHandler
 {
-    private static readonly int MaxWords = 160;
-
     private readonly IApiKeyProtector _keys;
     private readonly ILlmProviderFactory _factory;
     private readonly IConfiguration _config;
@@ -121,59 +101,32 @@ public sealed class EvolutionHandler : IWorkHandler
         var bot = await db.Bots.Include(b => b.Preset)
             .FirstOrDefaultAsync(b => b.Id == conversation.BotId, ct);
         if (bot is null || bot.Preset is null || !bot.EvolutionEnabled) return WorkOutcome.Ok; // switched off — stale claim
-        var preset = bot.Preset;
-        if (string.IsNullOrWhiteSpace(preset.GenerationModel)) return WorkOutcome.Ok; // configuration state
+        if (string.IsNullOrWhiteSpace(bot.Preset.GenerationModel)) return WorkOutcome.Ok; // configuration state
 
-        // Re-validate the trigger: a claim may be stale (the watermark advanced,
-        // or a human edit/reset re-armed the cooldown) — then no-op succeeds.
-        var newCount = await db.Messages
-            .CountAsync(m => m.ConversationId == item.ConversationId
-                && m.Id > (bot.EvolutionUpToMessageId ?? 0), ct);
+        // Re-validate the trigger: a claim may be stale (already consolidated, or a
+        // human edit re-armed the cooldown) — then a no-op succeeds.
+        var active = await PersonaTraits.ActiveRowsAsync(db, bot.Id, ct);
         var lastVersionAt = await db.PersonaVersions
             .Where(v => v.BotId == bot.Id)
             .MaxAsync(v => (DateTime?)v.CreatedAt, ct);
         var cooldownCutoff = DateTime.UtcNow.AddHours(-_config.GetValue("Evolution:CooldownHours", 12));
-        if (!ShouldEvolve(newCount, lastVersionAt, _config.GetValue("Evolution:MinNewMessages", 40), cooldownCutoff))
+        if (!PersonaTraits.ShouldConsolidate(active.Count, _config.GetValue("Turn:ConsolidateAbove", 12), lastVersionAt, cooldownCutoff))
             return WorkOutcome.Ok;
 
-        return await EvolveAsync(db, bot.Id, ct);
+        return await ConsolidateAsync(db, bot, active, ct);
     }
 
-    private async Task<WorkOutcome> EvolveAsync(AppDbContext db, int botId, CancellationToken ct)
+    private async Task<WorkOutcome> ConsolidateAsync(AppDbContext db, Bot bot, List<BotTrait> active, CancellationToken ct)
     {
-        var bot = await db.Bots.Include(b => b.Preset)
-            .FirstAsync(b => b.Id == botId, ct);
         var preset = bot.Preset!;
-        var maxTailMessages = _config.GetValue("Evolution:MaxTailMessages", 60);
-
-        // ── Baseline: the current (latest) version + fixed constraints (§2.4) ───
-        var currentVersion = await db.PersonaVersions
-            .Where(v => v.BotId == botId)
-            .OrderByDescending(v => v.Id)
-            .FirstOrDefaultAsync(ct);
-        var baseline = currentVersion?.Content ?? "";
+        var botId = bot.Id;
+        var maxChars = _config.GetValue("Turn:MaxTraitChars", 200);
 
         var directives = await db.BotDirectives
             .Where(d => d.BotId == botId && d.IsActive)
             .OrderBy(d => d.Id)
             .Select(d => d.Text)
             .ToListAsync(ct);
-
-        // ── The new material: the tail of the creator's messages since the pass ──
-        var watermark = bot.EvolutionUpToMessageId ?? 0;
-        var tail = await db.Messages
-            .AsNoTracking()
-            .Where(m => m.Id > watermark
-                && m.Conversation.UserId == bot.OwnerId
-                && m.Conversation.BotId == botId)
-            .OrderByDescending(m => m.Id)
-            .Take(maxTailMessages)
-            .ToListAsync(ct);
-        tail.Reverse();
-        if (tail.Count == 0) return WorkOutcome.Ok; // the tail was already consumed — stale claim
-
-        var transcript = string.Join("\n", tail.Select(m =>
-            $"{(m.Role == MessageRole.User ? "creator" : bot.Name)} ({m.CreatedAt.ToUniversalTime():ddd d MMM} {m.CreatedAt.Hour:00}:{m.CreatedAt.Minute:00}): {m.Content}"));
 
         // ── Provider (utility model when set, §3) ─────────────────────────────
         string? apiKey = null;
@@ -197,28 +150,22 @@ public sealed class EvolutionHandler : IWorkHandler
             TimeoutMs = preset.TimeoutMs ?? 120_000,
         });
 
-        // ── The bounded rewrite (§2.4): core + directives are fixed constraints ─
         // Qwen3's chat template requires a user message in the list, so the full
         // brief goes in the user turn and the system message stays a short role.
-        var system = "You maintain the evolved-traits layer of a virtual friend's personality. " +
-                     "Output only the document text — no headings, no meta-commentary.";
+        var system = "You maintain the list of traits a virtual friend has developed through its friendship. " +
+                     "Output only a JSON array of strings — no commentary, no code fence.";
 
         var brief =
-            "Rewrite the evolved-traits document below the constraints.\n" +
-            "The core identity and the creator's directives are FIXED — do not restate, " +
-            "contradict, or override them in your output. The document describes only what " +
-            "the relationship itself has added: shared shorthand and inside references, the " +
-            "tone the friendship has settled into, habits of the two of you, how the friend " +
-            "has grown because of this friendship.\n\n" +
+            "Consolidate the trait list below into FEWER items: merge overlapping ones, drop " +
+            "duplicates and things that no longer hold, keep what is distinctive. Each item is one " +
+            $"short phrase (at most {maxChars} characters) about the friendship itself: a habit, a " +
+            "shared joke, a tone, how the friend has grown.\n" +
+            "The core identity and the creator's directives are FIXED — do not restate, contradict " +
+            "or override them.\n\n" +
             $"Core identity (fixed):\n{bot.CorePersona}\n\n" +
             $"Directives (fixed):\n{(directives.Count == 0 ? "(none)" : string.Join("\n", directives.Select(d => "- " + d)))}\n\n" +
-            "Current evolved-traits document (your baseline — refine it, do not start from scratch):\n" +
-            (string.IsNullOrWhiteSpace(baseline) ? "(none yet — this is the first pass)" : baseline) +
-            $"\n\nRecent conversation between {bot.Name} and their creator (excerpt, oldest first):\n{transcript}\n\n" +
-            "Rewrite the evolved-traits document as a short prose document (at most about " +
-            $"{MaxWords} words). Keep what is still true, add what the recent conversation " +
-            "shows has settled, drop what no longer holds. If nothing has changed, return " +
-            "the baseline unchanged.";
+            "Current traits:\n" + string.Join("\n", active.Select(t => "- " + t.Text)) +
+            "\n\nReturn the consolidated list as a JSON array of strings.";
 
         var requestMessages = new List<LlmChatMessage>
         {
@@ -230,8 +177,8 @@ public sealed class EvolutionHandler : IWorkHandler
         {
             Messages = requestMessages,
             Model = model,
-            Temperature = 0.4f,
-            MaxTokens = _config.GetValue("Evolution:MaxTokens", 512),
+            Temperature = 0.3f,
+            MaxTokens = _config.GetValue("Evolution:MaxTokens", 1024),
         };
 
         var now = DateTime.UtcNow;
@@ -252,25 +199,20 @@ public sealed class EvolutionHandler : IWorkHandler
             failure = ex is LlmProviderException lpe
                 ? (lpe.HttpStatus is { } s ? $"Provider returned HTTP {s}: {Truncate(lpe.ErrorPayload, 2000)}" : lpe.Message)
                 : ex.Message;
-            _log.LogWarning("Evolution for bot {BotId} failed: {Failure}", botId, Truncate(failure, 300));
         }
 
-        // ── Store a new version + advance the watermark only on success (§2.4) ──
-        PersonaVersion? version = null;
-        if (!failed && !string.IsNullOrWhiteSpace(rawResponse) && rawResponse != baseline)
+        // ── Validate: non-empty JSON of strings, else the pass fails (§12b retry) ──
+        List<string>? merged = null;
+        if (!failed)
         {
-            version = new PersonaVersion
+            merged = PersonaTraits.ParseConsolidation(rawResponse, maxChars);
+            if (merged is null)
             {
-                BotId = botId,
-                Content = rawResponse,
-                Source = PersonaVersionSource.Evolution,
-                CreatedAt = now,
-            };
-            db.PersonaVersions.Add(version);
-            var tracked = await db.Bots.FirstAsync(b => b.Id == botId, ct);
-            tracked.EvolutionUpToMessageId = tail.Max(m => m.Id);
-            await db.SaveChangesAsync(ct); // materialises version.Id
+                failed = true;
+                failure = "Consolidation result was not a non-empty JSON array of strings.";
+            }
         }
+        if (failed) _log.LogWarning("Consolidation for bot {BotId} failed: {Failure}", botId, Truncate(failure, 300));
 
         // ── Log the call, success or failure (§4.4) ────────────────────────────
         var interaction = new LlmInteraction
@@ -290,22 +232,23 @@ public sealed class EvolutionHandler : IWorkHandler
             FinishReason = completion?.FinishReason,
             Failed = failed,
             FailureReason = failure,
+            Notes = merged is null ? null : $"Consolidated {active.Count} → {merged.Count} traits",
             CreatedAt = now,
         };
         db.LlmInteractions.Add(interaction);
         await db.SaveChangesAsync(ct); // materialises interaction.Id
 
-        if (version is not null)
-        {
-            version.InteractionId = interaction.Id; // the audit trail from §2.4
-            await db.SaveChangesAsync(ct);
-        }
+        if (failed || merged is null) return WorkOutcome.Fail(failure);
 
-        if (failed)
-            return WorkOutcome.Fail(failure);
+        // ── Replace the active set and store a Consolidation version (§2.4) ────
+        foreach (var t in active) t.RetiredAt = now;
+        foreach (var text in merged) db.BotTraits.Add(new BotTrait { BotId = botId, Text = text, CreatedAt = now });
+        await db.SaveChangesAsync(ct);
+        var version = await PersonaTraits.RecordVersionAsync(db, botId, PersonaVersionSource.Consolidation, ct);
+        version.InteractionId = interaction.Id; // the audit trail from §2.4
+        await db.SaveChangesAsync(ct);
 
-        _log.LogInformation("Evolution for bot {BotId}: {Result}", botId,
-            version is null ? "no change (baseline kept)" : "new version written");
+        _log.LogInformation("Consolidation for bot {BotId}: {From} → {To} traits", botId, active.Count, merged.Count);
         return WorkOutcome.Ok;
     }
 
@@ -316,20 +259,4 @@ public sealed class EvolutionHandler : IWorkHandler
         System.Text.Json.JsonSerializer.Serialize(messages
             .Select(m => new { role = m.Role.ToString().ToLowerInvariant(), content = m.Content })
             .ToList());
-
-    /// <summary>
-    /// The evolution trigger (§2.4): enough new creator messages AND the cooldown
-    /// has elapsed. The cooldown is measured from the newest version of <b>any</b>
-    /// source — a human edit or revert also resets it, protecting corrections from
-    /// an immediate overwrite.
-    /// </summary>
-    public static bool ShouldEvolve(
-        int newCreatorMessages,
-        DateTime? lastVersionAt,
-        int minNewMessages,
-        DateTime cooldownCutoff)
-    {
-        if (newCreatorMessages < minNewMessages) return false;
-        return lastVersionAt is null || lastVersionAt <= cooldownCutoff;
-    }
 }

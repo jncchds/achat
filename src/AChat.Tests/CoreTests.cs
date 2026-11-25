@@ -406,37 +406,27 @@ public class EvolutionTriggerTests
     private static readonly DateTime Cutoff = Now.AddHours(-12); // 12h cooldown
 
     [Fact]
-    public void Triggers_when_enough_new_messages_and_no_versions_yet()
+    public void Arms_when_over_the_threshold_and_no_versions_yet()
     {
-        Assert.True(EvolutionHandler.ShouldEvolve(50, null, 40, Cutoff));
+        Assert.True(PersonaTraits.ShouldConsolidate(13, 12, null, Cutoff));
     }
 
     [Fact]
-    public void Does_not_trigger_below_the_message_threshold()
+    public void Does_not_arm_at_or_below_the_threshold()
     {
-        Assert.False(EvolutionHandler.ShouldEvolve(10, null, 40, Cutoff));
+        Assert.False(PersonaTraits.ShouldConsolidate(12, 12, null, Cutoff));
     }
 
     [Fact]
-    public void Does_not_trigger_during_the_cooldown()
+    public void Does_not_arm_during_the_cooldown_of_any_source()
     {
-        var recent = Now.AddMinutes(-30); // a version written half an hour ago
-        Assert.False(EvolutionHandler.ShouldEvolve(50, recent, 40, Cutoff));
+        // A fresh human edit, revert or bot turn all hold consolidation back.
+        Assert.False(PersonaTraits.ShouldConsolidate(20, 12, Now.AddMinutes(-30), Cutoff));
     }
 
     [Fact]
-    public void Triggers_once_the_cooldown_has_elapsed()
+    public void Arms_once_the_cooldown_has_elapsed()
     {
-        var old = Now.AddHours(-24);
-        Assert.True(EvolutionHandler.ShouldEvolve(50, old, 40, Cutoff));
-    }
-
-    [Fact]
-    public void A_human_edit_or_revert_resets_the_cooldown()
-    {
-        // The newest version is a fresh human edit — the correction must not be
-        // overwritten by an immediate evolution pass.
-        var freshEdit = Now.AddMinutes(-5);
-        Assert.False(EvolutionHandler.ShouldEvolve(50, freshEdit, 40, Cutoff));
+        Assert.True(PersonaTraits.ShouldConsolidate(20, 12, Now.AddHours(-24), Cutoff));
     }
 }

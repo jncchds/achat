@@ -18,6 +18,8 @@ interface UiMsg {
   recalled?: number[]
   /** Memories the bot chose to keep from this exchange (§4.7). */
   remembered?: number
+  /** Trait changes the bot made this turn — creator only (§4.7). */
+  traitChanges?: { added: string[]; retired: string[] }
 }
 
 function toUiMsg(m: Message): UiMsg {
@@ -90,16 +92,20 @@ export default function Chat() {
         const server = ms.map(toUiMsg)
         setMsgs(prev => {
           const last = prev[prev.length - 1]
-          if (last && last.recalled && last.recalled.length > 0 && server.length > 0)
-            server[server.length - 1].recalled = last.recalled
+          if (last && server.length > 0) {
+            const tail = server[server.length - 1]
+            if (last.recalled && last.recalled.length > 0) tail.recalled = last.recalled
+            if (last.remembered) tail.remembered = last.remembered
+            if (last.traitChanges) tail.traitChanges = last.traitChanges
+          }
           return server.length ? server : prev
         })
       }).catch(() => {})
 
-    conn.on('chat.completed', (m: { recalledMemoryIds?: number[]; mood?: string | null; remembered?: number }) => {
+    conn.on('chat.completed', (m: { recalledMemoryIds?: number[]; mood?: string | null; remembered?: number; traitChanges?: { added: string[]; retired: string[] } | null }) => {
       const recalled = m?.recalledMemoryIds ?? []
       if (m && 'mood' in m) setMood(m.mood ?? null)
-      patchStreaming(d => ({ ...d, streaming: false, complete: true, recalled, remembered: m?.remembered ?? 0 }))
+      patchStreaming(d => ({ ...d, streaming: false, complete: true, recalled, remembered: m?.remembered ?? 0, traitChanges: m?.traitChanges ?? undefined }))
       streamingKey.current = null
       setBusy(false)
       refresh()
@@ -154,8 +160,9 @@ export default function Chat() {
   }, [id])
 
   const patchStreaming = (fn: (m: UiMsg) => UiMsg) => {
+    // Read the key now: React runs the updater later, after the handler has cleared it.
+    const key = streamingKey.current
     setMsgs(prev => {
-      const key = streamingKey.current
       if (!key) return prev
       return prev.map(m => m.key === key ? fn(m) : m)
     })
@@ -269,6 +276,12 @@ export default function Chat() {
             {m.role === 'Assistant' && (m.remembered ?? 0) > 0 && (
               <Link to={`/bots/${id}/memories`} className="msg-recalled">
                 📝 noted {m.remembered} {m.remembered === 1 ? 'thing' : 'things'} to remember — see what’s on file
+              </Link>
+            )}
+            {m.role === 'Assistant' && m.traitChanges && (
+              <Link to={`/bots/${id}/settings`} className="msg-recalled"
+                title={[...m.traitChanges.added.map(t => '+ ' + t), ...m.traitChanges.retired.map(t => '− ' + t)].join('\n')}>
+                🌱 changed how they see themselves — see personality
               </Link>
             )}
             {!m.complete && m.error && <span className="msg-error">{m.error}</span>}

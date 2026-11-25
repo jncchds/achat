@@ -3,7 +3,9 @@
 // Endpoints: /v1/models, /v1/chat/completions (SSE + JSON), /v1/embeddings
 //
 // Purpose-aware replies (inspected via the system message):
-//   • evolution requests  → a fixed evolved-traits document
+//   • consolidation requests → a fixed JSON array of merged trait strings
+//   • chat turns whose last user message carries [[trait:TEXT]] and/or [[retire:ID]]
+//     → a turn envelope JSON that adds / retires that trait (§4.7)
 //   • extraction requests → a fixed JSON array of memory candidates
 //   • summary requests    → a fixed summary sentence
 //   • anything else (chat)→ an echo-style reply
@@ -23,9 +25,10 @@ import { fileURLToPath } from 'node:url'
 const PORT = parseInt(process.argv[2] || '18999', 10)
 const LOG_PATH = process.env.MOCK_LOG || fileURLToPath(new URL('./mock-requests.jsonl', import.meta.url))
 
-const EVOLVED_DOC = 'You two share a running joke about the flat heating, which you call Steve. ' +
-  'The tone has settled into brisk, good-humoured banter; Sam likes when you name the problem first ' +
-  'and the fix second. You have grown to be the one Sam tells things to before anyone else.'
+const CONSOLIDATED = JSON.stringify([
+  'You two share a running joke about the flat heating, which you call Steve.',
+  'The tone has settled into brisk, good-humoured banter.',
+])
 
 const EXTRACTION_JSON = JSON.stringify([
   { content: 'The user calls the flat heating unit Steve.', kind: 'fact', importance: 3 },
@@ -37,7 +40,7 @@ const SUMMARY_TEXT = 'Sam has been dealing with a broken flat heating (which the
 
 function classify(messages) {
   const system = (messages.find(m => m.role === 'system')?.content || '').slice(0, 400).toLowerCase()
-  if (system.includes('evolved-traits')) return 'evolution'
+  if (system.includes('list of traits')) return 'evolution'
   if (system.includes('extract durable memories')) return 'extraction'
   if (system.includes('rolling summary') || system.includes('running summary')) return 'summary'
   return 'chat'
@@ -94,12 +97,17 @@ const server = http.createServer((req, res) => {
     if (req.url === '/v1/chat/completions') {
       const kind = classify(parsed.messages || [])
       let reply
-      if (kind === 'evolution') reply = EVOLVED_DOC
+      if (kind === 'evolution') reply = CONSOLIDATED
       else if (kind === 'extraction') reply = EXTRACTION_JSON
       else if (kind === 'summary') reply = SUMMARY_TEXT
       else {
         const last = (parsed.messages || []).slice(-1)[0]
-        reply = `[mock:${kind}] You said: ${(last?.content || '').slice(0, 120)}`
+        const text = last?.content || ''
+        const adds = [...text.matchAll(/\[\[trait:(.+?)\]\]/g)].map(m => m[1])
+        const retires = [...text.matchAll(/\[\[retire:(\d+)\]\]/g)].map(m => parseInt(m[1], 10))
+        reply = adds.length || retires.length
+          ? JSON.stringify({ reply: `[mock:envelope] noted`, mood: null, traits: { add: adds, retire: retires } })
+          : `[mock:${kind}] You said: ${text.slice(0, 120)}`
       }
 
       if (!parsed.stream) {

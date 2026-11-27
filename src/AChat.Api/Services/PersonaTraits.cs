@@ -14,7 +14,9 @@ public sealed record TraitChanges(IReadOnlyList<string> Add, IReadOnlyList<int> 
 /// <summary>Limits for the bot's own trait changes (config <c>Turn:*</c>).</summary>
 public sealed record TraitLimits(int MaxPerDay, int MaxItems, int MaxItemChars, int MaxTotalChars)
 {
-    public static TraitLimits From(IConfiguration c) => new(
+    public static TraitLimits From(IConfiguration? c) => From0(c ?? new ConfigurationBuilder().Build());
+
+    private static TraitLimits From0(IConfiguration c) => new(
         c.GetValue("Turn:MaxTraitChangesPerDay", 3),
         c.GetValue("Turn:MaxTraits", 20),
         c.GetValue("Turn:MaxTraitChars", 200),
@@ -118,6 +120,28 @@ public static class PersonaTraits
             plan.Add.Add(text);
         }
         return plan;
+    }
+
+    /// <summary>
+    /// The same size caps for a human add (<paramref name="replacingId"/> null) or edit as the bot's
+    /// envelope gets (§4.7): per-item length, item count, total characters. Returns the 400 message,
+    /// or null when fine. An edit that does not grow the list or the total is always allowed, so a
+    /// list that is already over a cap (legacy, or after a limit change) can still be trimmed.
+    /// </summary>
+    public static string? CheckHumanEdit(IReadOnlyList<TraitItem> active, int? replacingId, string text, TraitLimits lim)
+    {
+        text = text.Trim();
+        if (text.Length == 0) return replacingId is null ? "The trait is empty." : "The trait is empty — remove it instead.";
+        var old = replacingId is null ? null : active.FirstOrDefault(i => i.Id == replacingId);
+        if (text.Length > lim.MaxItemChars && text != old?.Text)
+            return $"A trait is at most {lim.MaxItemChars} characters.";
+        if (replacingId is null && active.Count >= lim.MaxItems)
+            return $"The list is full ({lim.MaxItems} traits) — retire or merge one first.";
+        var total = active.Sum(i => i.Text.Length) - (old?.Text.Length ?? 0) + text.Length;
+        var before = active.Sum(i => i.Text.Length);
+        if (total > lim.MaxTotalChars && total > before)
+            return $"The traits together are at most {lim.MaxTotalChars} characters ({total} with this change) — retire or shorten one first.";
+        return null;
     }
 
     /// <summary>Consolidation trigger: more active items than the threshold and the cooldown elapsed (newest version of any source).</summary>

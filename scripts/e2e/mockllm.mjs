@@ -25,7 +25,19 @@ import { fileURLToPath } from 'node:url'
 const PORT = parseInt(process.argv[2] || '18999', 10)
 const LOG_PATH = process.env.MOCK_LOG || fileURLToPath(new URL('./mock-requests.jsonl', import.meta.url))
 
-const CONSOLIDATED = JSON.stringify([
+// Failure modes (also settable at runtime: POST /_mode {"maxPromptTokens":N,"truncate":"empty"|"cut"|null,"truncateKind":…}):
+//   MOCK_MAX_PROMPT_TOKENS=N → chat requests over ~N tokens get HTTP 400 context_length_exceeded
+//   MOCK_TRUNCATE=empty|cut  → consolidation answers finish_reason=length (empty / cut-off content)
+//   MOCK_LIMIT_KIND=all|background → which requests the context limit applies to (background = not chat turns)
+//   MOCK_TRUNCATE_KIND=evolution|summary|all → which background pass the truncation hits (default evolution)
+const mode = {
+  maxPromptTokens: parseInt(process.env.MOCK_MAX_PROMPT_TOKENS || '0', 10),
+  truncate: process.env.MOCK_TRUNCATE || null,
+  truncateKind: process.env.MOCK_TRUNCATE_KIND || 'evolution',
+  limitKind: process.env.MOCK_LIMIT_KIND || 'all',
+}
+
+const CONSOLIDATED =JSON.stringify([
   'You two share a running joke about the flat heating, which you call Steve.',
   'The tone has settled into brisk, good-humoured banter.',
 ])
@@ -36,7 +48,7 @@ const SUMMARY_TEXT = 'Sam has been dealing with a broken flat heating (which the
 function classify(messages) {
   const system = (messages.find(m => m.role === 'system')?.content || '').slice(0, 400).toLowerCase()
   if (system.includes('list of traits')) return 'evolution'
-  if (system.includes('rolling summary') || system.includes('running summary')) return 'summary'
+  if (system.includes('rolling summary') || system.includes('narrative summary') || system.includes('running summary')) return 'summary'
   return 'chat'
 }
 
@@ -88,8 +100,37 @@ const server = http.createServer((req, res) => {
       }))
     }
 
+    if (req.url === '/_mode') {
+      // Failure modes at runtime: {"maxPromptTokens": N|0, "truncate": "empty"|"cut"|null, "truncateKind": "evolution"|"summary"|"all"}
+      if ('maxPromptTokens' in parsed) mode.maxPromptTokens = parsed.maxPromptTokens || 0
+      if ('truncate' in parsed) mode.truncate = parsed.truncate || null
+      if ('truncateKind' in parsed) mode.truncateKind = parsed.truncateKind || 'evolution'
+      if ('limitKind' in parsed) mode.limitKind = parsed.limitKind || 'all'
+      res.writeHead(200, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify(mode))
+    }
+
     if (req.url === '/v1/chat/completions') {
       const kind = classify(parsed.messages || [])
+
+      // Mode: reject prompts over N (estimated chars/4) with an OpenAI-style context-length error.
+      const promptTokens = Math.ceil((parsed.messages || []).reduce((n, m) => n + (m.content || '').length, 0) / 4)
+      if (mode.maxPromptTokens > 0 && promptTokens > mode.maxPromptTokens && (mode.limitKind === 'all' || kind !== 'chat')) {
+        res.writeHead(400, { 'content-type': 'application/json' })
+        return res.end(JSON.stringify({ error: {
+          message: `This model's maximum context length is ${mode.maxPromptTokens} tokens. However, your messages resulted in ${promptTokens} tokens. Please reduce the length of the messages.`,
+          type: 'invalid_request_error', param: 'messages', code: 'context_length_exceeded' } }))
+      }
+      // Mode: consolidation answers with finish_reason=length — empty (a reasoning model that spent
+      // the cap thinking) or cut off mid-array.
+      if (mode.truncate && kind !== 'chat' && (mode.truncateKind === 'all' || mode.truncateKind === kind) && !parsed.stream) {
+        const full = kind === 'summary' ? SUMMARY_TEXT : CONSOLIDATED
+        res.writeHead(200, { 'content-type': 'application/json' })
+        return res.end(JSON.stringify({
+          choices: [{ message: { role: 'assistant', content: mode.truncate === 'cut' ? full.slice(0, 40) : '', reasoning_content: 'Let me think about this…' }, finish_reason: 'length' }],
+          usage: { prompt_tokens: promptTokens, completion_tokens: parsed.max_tokens || 1024, total_tokens: promptTokens + (parsed.max_tokens || 1024) },
+        }))
+      }
       let reply
       if (kind === 'evolution') reply = CONSOLIDATED
       else if (kind === 'summary') reply = SUMMARY_TEXT

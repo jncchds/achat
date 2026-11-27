@@ -55,7 +55,10 @@ with the `ACHAT_` prefix and .NET nested-key convention (`ACHAT_Section__Key`):
 | `Chat__AssumedContextTokens` | `32000` | Assumed context window for prompt budgeting (§5.5) |
 | `Chat__BudgetPersonaPercent` / `BudgetMemoryPercent` / `BudgetSummaryPercent` / `BudgetHistoryPercent` | `10 / 15 / 10 / 50` | Prompt budget shares; recent history absorbs the remainder |
 | `Chat__SummaryTailTokens` | `800` | Un-summarised tail that triggers a summary rewrite (§5.3) |
-| `Chat__SummaryMaxTokens` | `1024` | Output cap for the summary call (covers reasoning-model thinking) |
+| `Chat__SummaryMaxTokens` | `4096` | Output cap for the summary call (covers reasoning-model thinking; `finish_reason=length` fails the pass with this hint) |
+| `Chat__SummaryMaxInputTokens` | `4000` | Input budget of one summary call (instructions + previous summary + new messages); a longer tail is summarised in steps, oldest first |
+| `Chat__SummaryTargetTokens` | `800` | Length the summary prompt asks for |
+| `Chat__SummaryMaxSteps` | `8` | Most summary steps in one pass; the rest is picked up by the next pass |
 | `Chat__SummaryTemperature` | `0.3` | Sampling temperature for the summary call |
 | `Memory__TopK` | `5` | Max memories retrieved per turn (§5.4) |
 | `Memory__ScoreFloor` | `0.35` | Rank score below which a memory is not retrieved |
@@ -69,7 +72,9 @@ with the `ACHAT_` prefix and .NET nested-key convention (`ACHAT_Section__Key`):
 | `Turn__MaxTraitsTotalChars` | `2000` | Total characters over all active items; same refusal as above |
 | `Turn__ConsolidateAbove` | `12` | Active trait items above which the slow consolidation pass is armed (§2.4) |
 | `Evolution__CooldownHours` | `12` | Cooldown after a human edit/revert during which the bot's trait changes are dropped, and between consolidation passes (newest version of any source) |
-| `Evolution__MaxTokens` | `1024` | Output cap for the consolidation call |
+| `Evolution__MaxTokens` | `4096` | Output cap for the consolidation call (reasoning models spend it thinking; `finish_reason=length` fails the pass with this hint) |
+| `Evolution__MaxInputTokens` | `4000` | Input budget of one consolidation call (instructions + core + directives + traits, ~4 chars/token); longer lists are consolidated in chunks |
+| `Evolution__MinTraitsAfter` | half of `Turn__ConsolidateAbove` | Fewest traits a consolidation may leave (never more than it was given); a result below it is not applied and retries |
 | `Turn__MoodMinTurns` / `Turn__MoodMinMinutes` | `6 / 30` | A bot's mood may change only after this many user turns **and** minutes since its last change (§4.7) |
 | `Retention__InteractionDays` | `90` | Prune audit-log interactions older than this many days; `0` = keep forever (§4.4) |
 | `Retention__IntervalHours` | `6` | How often the retention worker runs |
@@ -138,6 +143,8 @@ ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase3.mjs       # needs a REA
 ACHAT_BASE=http://localhost:5002 node scripts/e2e/phase7-verify.mjs  # new providers against a live endpoint
 ACHAT_BASE=http://localhost:5002 KEYFILE=<env file with OPENROUTER_API_KEY=...> OUT=out.json node scripts/e2e/real-envelope.mjs  # real hosted model (free OpenRouter ids by default): envelope validity, memories, mood, traits, stop/try again; start the stack with Chat__HistoryTurns=4 (a single-model local server swaps models on every embed/chat switch, ~4 min each)
 BASE=http://localhost:5002 node scripts/e2e/workqueue.mjs          # dead endpoint → summary + consolidation dead-letter → try-again → admin retry
+BASE=http://localhost:5002 node scripts/e2e/consolidation-limits.mjs  # token limits: chunking, context-length shrink, truncation dead-letter (mock modes via POST /_mode; instance env in the script header); KEYFILE=… adds a real-model run (REAL_ONLY=1 for that alone, on an instance with the default ConsolidateAbove)
+BASE=http://localhost:5002 node scripts/e2e/summary-limits.mjs     # summary under token limits: steps, context-length shrink, truncation dead-letter (instance env in the script header); KEYFILE=… adds a real-model run
 ```
 
 `workqueue.mjs` needs a fast queue and low thresholds on the throwaway instance (it also

@@ -17,6 +17,22 @@ public static class MemoryWriter
 {
     public enum CandidateAction { Insert, Drop, Supersede }
 
+    /// <summary>
+    /// A bot memory is a short fact (§5.3). The envelope does not bound its length, and the text
+    /// goes straight into the embedding call — a runaway item could exceed the embedding model's
+    /// context (nomic: 2048 tokens) and fail the whole batch. Longer content is clipped.
+    /// </summary>
+    public const int MaxContentChars = 1000;
+
+    /// <summary>Clips a candidate's content to <see cref="MaxContentChars"/> (at a word boundary when one is near).</summary>
+    public static string Clip(string content)
+    {
+        if (content.Length <= MaxContentChars) return content;
+        var cut = content[..MaxContentChars];
+        var space = cut.LastIndexOf(' ');
+        return (space > MaxContentChars - 100 ? cut[..space] : cut).TrimEnd() + "…";
+    }
+
     public sealed record Result(IReadOnlyList<int> Stored, IReadOnlyList<int> Superseded);
 
     /// <summary>Candidate disposition against the nearest existing memory (§5.3, §5.6). Pure.</summary>
@@ -43,6 +59,7 @@ public static class MemoryWriter
         var stored = new List<int>();
         var superseded = new List<int>();
         if (candidates.Count == 0) return new Result(stored, superseded);
+        candidates = candidates.Select(c => c with { Content = Clip(c.Content) }).ToList();
 
         var vectors = await provider.EmbedAsync(embeddingModel,
             candidates.Select(c => c.Content).ToList(), ct);

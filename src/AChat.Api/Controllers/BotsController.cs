@@ -321,10 +321,9 @@ public class BotsController(AppDbContext db, IConfiguration? config = null) : Co
         var bot = await _OwnedBotAsync(id);
         if (bot is null) return NotFound();
         var text = req.Text.Trim();
-        var max = (config?.GetValue("Turn:MaxTraitChars", 200) ?? 200);
-        if (text.Length == 0) return BadRequest(new { message = "The trait is empty." });
-        if (text.Length > max) return BadRequest(new { message = $"A trait is at most {max} characters." });
         await PersonaTraits.EnsureLegacyAsync(db, id);
+        var tooBig = PersonaTraits.CheckHumanEdit(await PersonaTraits.ActiveAsync(db, id), null, text, TraitLimits.From(config));
+        if (tooBig is not null) return BadRequest(new { message = tooBig });
         db.BotTraits.Add(new BotTrait { BotId = id, Text = text, CreatedAt = DateTime.UtcNow });
         await db.SaveChangesAsync();
         return Ok(ToVersionDto(await PersonaTraits.RecordVersionAsync(db, id, PersonaVersionSource.UserEdited)));
@@ -340,9 +339,8 @@ public class BotsController(AppDbContext db, IConfiguration? config = null) : Co
         var row = await db.BotTraits.FirstOrDefaultAsync(t => t.Id == tid && t.BotId == id && t.RetiredAt == null);
         if (row is null) return NotFound();
         var text = req.Text.Trim();
-        var max = (config?.GetValue("Turn:MaxTraitChars", 200) ?? 200);
-        if (text.Length == 0) return BadRequest(new { message = "The trait is empty — remove it instead." });
-        if (text.Length > max && text != row.Text) return BadRequest(new { message = $"A trait is at most {max} characters." });
+        var tooBig = PersonaTraits.CheckHumanEdit(await PersonaTraits.ActiveAsync(db, id), tid, text, TraitLimits.From(config));
+        if (tooBig is not null) return BadRequest(new { message = tooBig });
         row.Text = text;
         await db.SaveChangesAsync();
         return Ok(ToVersionDto(await PersonaTraits.RecordVersionAsync(db, id, PersonaVersionSource.UserEdited)));

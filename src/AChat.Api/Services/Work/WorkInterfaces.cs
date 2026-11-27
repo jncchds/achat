@@ -8,10 +8,17 @@ namespace AChat.Api.Services;
 /// shaped failure text (provider HTTP status, parse error) for
 /// <see cref="WorkItem.LastFailure"/>.
 /// </summary>
-public sealed record WorkOutcome(bool Success, string? Failure = null)
+public sealed record WorkOutcome(bool Success, string? Failure = null, bool Permanent = false)
 {
     public static WorkOutcome Ok { get; } = new(true);
     public static WorkOutcome Fail(string? failure) => new(false, failure);
+
+    /// <summary>
+    /// A deterministic failure (context-length rejection, truncation that shrinking did not
+    /// cure): retrying the same request cannot succeed, so the item is dead-lettered at once
+    /// with the reason visible in the admin work panel (§12b).
+    /// </summary>
+    public static WorkOutcome FailPermanent(string? failure) => new(false, failure, true);
 }
 
 /// <summary>

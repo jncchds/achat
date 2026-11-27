@@ -112,6 +112,30 @@ check(await done(c, N), 'D: admin retry after the cause is gone consolidates', `
 const e = await api(`/api/bots/${c.id}/persona/traits`, { method: 'POST', body: JSON.stringify({ text: 'x'.repeat(201) }) })
 check(e.status === 400, 'E: a human trait over the length cap is a 400', e.data?.message)
 
+// ── F (optional) real hosted model ──────────────────────────────────────────
+// KEYFILE=<file with OPENROUTER_API_KEY=...>; the key only goes to the preset API, is never printed.
+if (process.env.KEYFILE) {
+  const fs = await import('node:fs')
+  const key = (fs.readFileSync(process.env.KEYFILE, 'utf8').match(/^OPENROUTER_API_KEY=(.+)$/m) || [])[1]?.trim()
+    || fs.readFileSync(process.env.KEYFILE, 'utf8').trim()
+  const model = process.env.REAL_MODEL || 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'
+  const real = (await api('/api/presets', { method: 'POST', body: JSON.stringify({
+    name: 'OpenRouter-free-T1', provider: 'OpenAICompatible', baseEndpoint: 'https://openrouter.ai/api/v1', apiKey: key,
+    generationModel: model, utilityModel: model, embeddingModel: 'nvidia/nemotron-3.5-embed-1b:free', temperature: 0.3 }) })).data
+  preset = real
+  const f = await botWithTraits('LimitsReal', parseInt(process.env.REAL_TRAITS || '40', 10))
+  const n = await traitCount(f.id)
+  const ok = await waitFor(async () => {
+    const w = await workFor(f.id)
+    return (await traitCount(f.id)) < n && !w ? 'ok' : (w?.status === 'Dead' ? 'dead' : null)
+  }, 600000)
+  const w = await workFor(f.id)
+  const rc = await calls(f.id)
+  check(ok === 'ok', `F: real model (${model}) consolidates ${n} traits`, `${ok}; now ${await traitCount(f.id)}; ${rc.length} calls, ${rc.filter(c => c.failed).length} failed; finish: ${[...new Set(rc.map(c => c.finishReason))]}; ${(w?.lastFailure || '').slice(0, 200)}`)
+  console.log('real traits:', JSON.stringify((await api(`/api/bots/${f.id}/persona/traits`)).data.map(t => t.text)))
+  await api(`/api/presets/${real.id}`, { method: 'DELETE' }) // drop the stored key
+}
+
 await mode({ maxPromptTokens: 0, truncate: null })
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed')
 process.exit(failures ? 1 : 0)

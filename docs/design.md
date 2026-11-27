@@ -241,8 +241,14 @@ about their cooking`) so the bot can retire by id.
 - **Consolidation** is the only periodic pass left. It is armed (§12b) only when more than
   `Turn:ConsolidateAbove` (12) items are active and the cooldown has passed (measured from the
   newest version of any source). One **utility-model** call (core + directives as constraints,
-  logged `PersonaEvolution`, `Evolution:MaxTokens` = 1024) rewrites the list into fewer merged
-  items; the result must be a non-empty JSON array of strings, or the pass fails and retries.
+  logged `PersonaEvolution`, `Evolution:MaxTokens` = 4096) rewrites the list into fewer merged
+  items; the result must be a non-empty JSON array of strings (inline `<think>` stripped), or the
+  pass fails and retries. **Token limits:** the prompt is bounded by `Evolution:MaxInputTokens`
+  (4000; fixed instructions + core + directives count against it) — a longer list is consolidated
+  in chunks, oldest first, and nothing is written until every chunk succeeded. A context-length
+  rejection or `finish_reason=length` is deterministic: the chunk is split in two and retried
+  once within the attempt, else the work item is dead-lettered at once (§12b) with an actionable
+  reason. Human trait add/edit obeys the same count/length/total caps as the envelope (400).
 - **Legacy.** A bot with prose from the old rewrite pass gets it as **one legacy item** on
   first read; older prose versions are read as one item too.
 - **Switch.** Evolution can be turned off per bot (`Bot.EvolutionEnabled`, toggle on the

@@ -60,7 +60,7 @@ public static class WorkQueue
         else
         {
             item.LastFailure = Truncate(outcome.Failure ?? "unknown failure", 2000);
-            if (item.Attempts >= item.MaxAttempts)
+            if (outcome.Permanent || item.Attempts >= item.MaxAttempts)
             {
                 item.Status = WorkStatus.Dead;
             }

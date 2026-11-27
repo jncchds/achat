@@ -178,7 +178,10 @@ if (process.env.KEYFILE) {
   const after = (await api(`/api/bots/${f.id}/persona/traits`)).data.map(t => t.text)
   console.log('real traits after:', JSON.stringify(after))
   check(after.length >= min && after.length <= above, `F: result within the target range ${min}–${above}`, `${n} → ${after.length}`)
-  await api(`/api/presets/${real.id}`, { method: 'DELETE' }) // drop the stored key
+  // drop the stored key: the bot first (a preset in use cannot be deleted), then the preset
+  await api(`/api/bots/${f.id}`, { method: 'DELETE' })
+  const del = await api(`/api/presets/${real.id}`, { method: 'DELETE' })
+  check(del.status < 300, 'F: the real preset (and its key) is deleted', String(del.status))
 }
 
 await mode({ maxPromptTokens: 0, truncate: null })

@@ -11,7 +11,7 @@
 //   -e ACHAT_Chat__SummaryTailTokens=2500 -e ACHAT_Chat__SummaryMaxInputTokens=1200
 //   BASE=http://localhost:5002 MOCK_CTL=http://localhost:18999 node scripts/e2e/summary-limits.mjs
 //
-// Optional real model (R): KEYFILE=<file with the OpenRouter key> [REAL_MODEL=...] — a long
+// Optional real model (R): KEYFILE=<file with the OpenRouter key> [REAL_MODEL=...] [REAL_ONLY=1] — a long
 // conversation summarises without failure. The key only goes to the preset API, is never printed,
 // and the preset is deleted afterwards.
 import { spawn } from 'node:child_process'
@@ -82,6 +82,7 @@ const done = async bot => waitFor(async () => (await calls(bot.id)).some(c => !c
 const turnsIn = body => [...body.slice(body.indexOf('New messages since then')).matchAll(/\nuser: turn (\d\d)/g)]
   .map(m => parseInt(m[1], 10))
 
+if (!process.env.REAL_ONLY) {
 // ── A ───────────────────────────────────────────────────────────────────────
 await mode({ maxPromptTokens: 0, truncate: null, truncateKind: 'evolution' })
 const a = await botWithLongChat('SumA', TURNS)
@@ -119,6 +120,8 @@ await mode({ truncate: null, truncateKind: 'evolution' })
 if (dead) await api(`/api/admin/work/${dead.id}/retry`, { method: 'POST' })
 check(await done(c), 'D: admin retry after the cause is gone summarises')
 
+}
+
 // ── R (optional) real hosted model ──────────────────────────────────────────
 if (process.env.KEYFILE) {
   const fs = await import('node:fs')
@@ -128,6 +131,7 @@ if (process.env.KEYFILE) {
   const real = (await api('/api/presets', { method: 'POST', body: JSON.stringify({
     name: 'OpenRouter-free-T2', provider: 'OpenAICompatible', baseEndpoint: 'https://openrouter.ai/api/v1', apiKey: key,
     generationModel: model, utilityModel: model, temperature: 0.3 }) })).data
+  let r = null
   try {
     preset = real
     const facts = [
@@ -137,7 +141,7 @@ if (process.env.KEYFILE) {
       'My friend Tomas lent me his bike.', 'I want to visit Iceland next summer.',
     ]
     const turn = i => `${facts[(i - 1) % facts.length]} ` + 'Also, rambling a bit about my week, the weather, the tram, and work. '.repeat(10)
-    const r = await botWithLongChat('SumReal', parseInt(process.env.REAL_TURNS || '10', 10), turn)
+    r = await botWithLongChat('SumReal', parseInt(process.env.REAL_TURNS || '10', 10), turn)
     const ok = await waitFor(async () => {
       const w = await workFor(r.id)
       if (w?.status === 'Dead') return 'dead'
@@ -150,7 +154,10 @@ if (process.env.KEYFILE) {
     const last = rc.filter(x => !x.failed).at(-1)
     if (last) console.log('real summary:', (await detail(last.id)).responseContent)
   } finally {
-    await api(`/api/presets/${real.id}`, { method: 'DELETE' }) // drop the stored key
+    // drop the stored key: the bot first (a preset in use cannot be deleted), then the preset
+    if (r) await api(`/api/bots/${r.id}`, { method: 'DELETE' })
+    const del = await api(`/api/presets/${real.id}`, { method: 'DELETE' })
+    check(del.status < 300, 'R: the real preset (and its key) is deleted', String(del.status))
   }
 }
 

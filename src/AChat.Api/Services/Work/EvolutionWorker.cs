@@ -82,6 +82,14 @@ public sealed class EvolutionProducer : IWorkProducer
 /// (<see cref="WorkOutcome.FailPermanent"/>) with an actionable reason. Nothing is
 /// written to the trait list until every chunk succeeded.
 /// </para>
+/// <para>
+/// The result keeps the personality: the prompt states a target range (at least
+/// <c>Evolution:MinTraitsAfter</c>, default half of <c>Turn:ConsolidateAbove</c>, never more than
+/// the input; at most <c>Turn:ConsolidateAbove</c>; chunks get proportional shares). A result
+/// below the floor is logged and not applied — a retryable failure. Chunk results that together
+/// are still above <c>Turn:ConsolidateAbove</c> get one final pass over the merged list when it
+/// fits the budget; if that pass fails the chunk results are applied as they are.
+/// </para>
 /// </summary>
 public sealed class EvolutionHandler : IWorkHandler
 {
@@ -146,8 +154,23 @@ public sealed class EvolutionHandler : IWorkHandler
         public required int MaxChars { get; init; }
         public required int MaxOutputTokens { get; init; }
         public required int ClipChars { get; init; }
+        /// <summary>The whole pass must keep at least this many traits (<c>Evolution:MinTraitsAfter</c>).</summary>
+        public required int Floor { get; init; }
+        /// <summary>The list size that triggers consolidation (<c>Turn:ConsolidateAbove</c>): the target maximum.</summary>
+        public required int Above { get; init; }
+        /// <summary>Number of traits the pass started with — chunk targets are proportional shares of it.</summary>
+        public required int Total { get; init; }
         public int? LastInteractionId { get; set; }
         public int Calls { get; set; }
+        public int Successes { get; set; }
+
+        /// <summary>The target range for a call over <paramref name="n"/> of the <see cref="Total"/> traits.</summary>
+        public (int Min, int Max) RangeFor(int n)
+        {
+            var min = Math.Max(1, (int)Math.Ceiling((double)Floor * n / Total));
+            var max = Math.Max(min, Math.Min(n, (int)Math.Ceiling((double)Above * n / Total)));
+            return (Math.Min(min, n), max);
+        }
     }
 
     private async Task<WorkOutcome> ConsolidateAsync(AppDbContext db, Bot bot, List<BotTrait> active, CancellationToken ct)
@@ -189,7 +212,7 @@ public sealed class EvolutionHandler : IWorkHandler
         var maxChars = _config.GetValue("Turn:MaxTraitChars", 200);
         var maxInput = _config.GetValue("Evolution:MaxInputTokens", 4000);
         var fixedTokens = PromptAssembly.EstimateTokens(SystemPrompt)
-            + PromptAssembly.EstimateTokens(BuildBrief(bot.CorePersona, directives, [], maxChars));
+            + PromptAssembly.EstimateTokens(BuildBrief(bot.CorePersona, directives, [], maxChars, 99, 99));
         var available = maxInput - fixedTokens;
         if (available < 64)
         {
@@ -200,15 +223,22 @@ public sealed class EvolutionHandler : IWorkHandler
             return WorkOutcome.FailPermanent(why);
         }
 
+        // The floor keeps the personality: a consolidation that collapses 40 traits into one is
+        // not applied (§2.4). Default half of the trigger size, never more than the input.
+        var above = _config.GetValue("Turn:ConsolidateAbove", 12);
+        var floor = Math.Clamp(_config.GetValue("Evolution:MinTraitsAfter", Math.Max(1, above / 2)), 1, active.Count);
+
         var run = new Run
         {
             Db = db, Bot = bot, Provider = provider, Model = model, Directives = directives,
             MaxChars = maxChars,
             MaxOutputTokens = _config.GetValue("Evolution:MaxTokens", 4096),
             ClipChars = Math.Max(maxChars, available * 3), // one legacy prose item can never exceed the budget on its own
+            Floor = floor, Above = above, Total = active.Count,
         };
 
-        var chunks = TokenLimits.Chunk(active, t => PromptAssembly.EstimateTokens(Clipped(t.Text, run.ClipChars)), available);
+        var texts = active.Select(t => Clipped(t.Text, run.ClipChars)).ToList();
+        var chunks = TokenLimits.Chunk(texts, t => PromptAssembly.EstimateTokens(t), available);
 
         // ── Run the chunks; all must succeed before anything is written ────────
         var merged = new List<string>();
@@ -221,6 +251,25 @@ public sealed class EvolutionHandler : IWorkHandler
                 if (!merged.Contains(m, StringComparer.OrdinalIgnoreCase)) merged.Add(m);
         }
         if (merged.Count == 0) return WorkOutcome.Fail("Consolidation produced no items.");
+
+        // ── Final pass: chunk results concatenated can still be over the trigger ──
+        // One more call over the merged list when it fits the budget. Its failure is not fatal:
+        // the chunk results are a valid consolidation on their own.
+        if (merged.Count > above && run.Successes > 1 && Fits(merged, available))
+        {
+            var final = await CallAsync(run, merged, (floor, Math.Max(floor, above)), ct);
+            if (final.Merged is not null) merged = final.Merged;
+            else _log.LogWarning("Consolidation for bot {BotId}: final pass over {Count} merged traits failed ({Failure}) — keeping the chunk results",
+                botId, merged.Count, Truncate(final.Failure, 200));
+        }
+
+        if (merged.Count < floor)
+        {
+            var why = $"Consolidation returned {merged.Count} traits from {active.Count}, below the floor of {floor} " +
+                      "(Evolution:MinTraitsAfter) — not applied.";
+            _log.LogWarning("Consolidation for bot {BotId}: {Why}", botId, why);
+            return WorkOutcome.Fail(why);
+        }
 
         // ── Replace the active set and store a Consolidation version (§2.4) ────
         var now = DateTime.UtcNow;
@@ -240,9 +289,9 @@ public sealed class EvolutionHandler : IWorkHandler
     /// One chunk. A deterministic failure (context rejection / truncation) splits a multi-item
     /// chunk in two and retries each half once (no further splitting); anything else returns as is.
     /// </summary>
-    private async Task<CallResult> RunChunkAsync(Run run, List<BotTrait> chunk, bool shrinkAllowed, CancellationToken ct)
+    private async Task<CallResult> RunChunkAsync(Run run, List<string> chunk, bool shrinkAllowed, CancellationToken ct)
     {
-        var res = await CallAsync(run, chunk, ct);
+        var res = await CallAsync(run, chunk, run.RangeFor(chunk.Count), ct);
         if (res.Merged is not null || !res.Shrinkable) return res;
 
         if (!shrinkAllowed || chunk.Count < 2)
@@ -261,11 +310,14 @@ public sealed class EvolutionHandler : IWorkHandler
         return new CallResult(merged, null, false, run.LastInteractionId);
     }
 
-    private async Task<CallResult> CallAsync(Run run, List<BotTrait> chunk, CancellationToken ct)
+    private static bool Fits(List<string> items, int available) =>
+        items.Sum(t => PromptAssembly.EstimateTokens(t) + 2) <= available;
+
+    private async Task<CallResult> CallAsync(Run run, List<string> chunk, (int Min, int Max) range, CancellationToken ct)
     {
         var bot = run.Bot;
         var preset = bot.Preset!;
-        var brief = BuildBrief(bot.CorePersona, run.Directives, chunk.Select(t => Clipped(t.Text, run.ClipChars)).ToList(), run.MaxChars);
+        var brief = BuildBrief(bot.CorePersona, run.Directives, chunk, run.MaxChars, range.Min, range.Max);
         var requestMessages = new List<LlmChatMessage>
         {
             new(MessageRole.System, SystemPrompt),
@@ -325,8 +377,17 @@ public sealed class EvolutionHandler : IWorkHandler
                 failed = true;
                 failure = "Consolidation result was not a non-empty JSON array of strings.";
             }
+            else if (merged.Count < range.Min)
+            {
+                // Collapsing the list erases the personality — logged, not applied, retried (§2.4).
+                failed = true;
+                failure = $"Consolidation returned {merged.Count} traits from {chunk.Count}, below the floor of {range.Min} " +
+                          "(Evolution:MinTraitsAfter) — not applied.";
+                merged = null;
+            }
         }
         if (failed) _log.LogWarning("Consolidation for bot {BotId} failed: {Failure}", bot.Id, Truncate(failure, 300));
+        else run.Successes++;
 
         // ── Log the call, success or failure (§4.4) ────────────────────────────
         var interaction = new LlmInteraction
@@ -347,7 +408,7 @@ public sealed class EvolutionHandler : IWorkHandler
             Failed = failed,
             HttpStatus = httpStatus,
             FailureReason = failure,
-            Notes = merged is null ? null : $"Consolidated {chunk.Count} → {merged.Count} traits",
+            Notes = merged is null ? $"Target {range.Min}–{range.Max} of {chunk.Count} traits" : $"Consolidated {chunk.Count} → {merged.Count} traits (target {range.Min}–{range.Max})",
             CreatedAt = DateTime.UtcNow,
         };
         run.Db.LlmInteractions.Add(interaction);
@@ -373,11 +434,14 @@ public sealed class EvolutionHandler : IWorkHandler
     }
 
     /// <summary>The user-turn brief for a list of trait texts (also used to size the fixed part with an empty list).</summary>
-    internal static string BuildBrief(string corePersona, IReadOnlyList<string> directives, IReadOnlyList<string> traits, int maxChars) =>
+    internal static string BuildBrief(string corePersona, IReadOnlyList<string> directives, IReadOnlyList<string> traits,
+        int maxChars, int minItems, int maxItems) =>
         "Consolidate the trait list below into FEWER items: merge overlapping ones, drop " +
         "duplicates and things that no longer hold, keep what is distinctive. Each item is one " +
         $"short phrase (at most {maxChars} characters) about the friendship itself: a habit, a " +
         "shared joke, a tone, how the friend has grown.\n" +
+        $"Return between {minItems} and {maxItems} items. Keep distinct traits separate — do not fold " +
+        "unrelated habits, jokes or tones into one vague item; the list is the friend's personality.\n" +
         "The core identity and the creator's directives are FIXED — do not restate, contradict " +
         "or override them.\n\n" +
         $"Core identity (fixed):\n{corePersona}\n\n" +

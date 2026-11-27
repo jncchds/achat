@@ -69,13 +69,25 @@ public sealed class SummaryProducer : IWorkProducer
 ///
 /// Uses the preset's utility model when set (else the generation model, §3), and
 /// logs every call — success or failure — to the interaction log (§4.4, purpose
-/// <see cref="InteractionPurpose.Summarisation"/>). The watermark
-/// (<see cref="ConversationSummary.CoversUpToMessageId"/>) advances only on
-/// success; a failed pass leaves it untouched so the same tail retries (now with
-/// backoff and a cap, §12b).
+/// <see cref="InteractionPurpose.Summarisation"/>).
+///
+/// <para>
+/// The prompt is bounded: <c>Chat:SummaryMaxInputTokens</c> covers the instructions, the
+/// previous summary and the new messages. A tail that does not fit is summarised in
+/// steps, oldest first; each step folds its messages into the summary and advances the
+/// watermark (<see cref="ConversationSummary.CoversUpToMessageId"/>) together, so the
+/// summary always matches what it covers and a later failure loses nothing. At most
+/// <c>Chat:SummaryMaxSteps</c> steps run per pass; the producer re-arms the rest. A
+/// context-length rejection or a <c>finish_reason=length</c> truncation is deterministic,
+/// so the step is halved once (for the rest of the pass); if that does not cure it the
+/// item is dead-lettered at once (<see cref="WorkOutcome.FailPermanent"/>) with an
+/// actionable reason. Any other failure retries with backoff (§12b).
+/// </para>
 /// </summary>
 public sealed class SummaryHandler : IWorkHandler
 {
+    private const string NoSummary = "(none — this is the start of the relationship)";
+
     private readonly IApiKeyProtector _keys;
     private readonly ILlmProviderFactory _factory;
     private readonly IConfiguration _config;
@@ -103,33 +115,10 @@ public sealed class SummaryHandler : IWorkHandler
         var bot = await db.Bots.Include(b => b.Preset)
             .FirstOrDefaultAsync(b => b.Id == conversation.BotId, ct);
         if (bot?.Preset is null) return WorkOutcome.Ok; // the bot or its preset is gone — stale claim
-        var preset = bot.Preset;
-        if (string.IsNullOrWhiteSpace(preset.GenerationModel)) return WorkOutcome.Ok; // configuration state
+        if (string.IsNullOrWhiteSpace(bot.Preset.GenerationModel)) return WorkOutcome.Ok; // configuration state
 
         // Re-validate the trigger: the tail may have shrunk (a stale claim) — then
         // no-op succeeds instead of burning another attempt.
-        var summary = await db.ConversationSummaries
-            .FirstOrDefaultAsync(s => s.BotId == conversation.BotId && s.UserId == conversation.UserId, ct);
-        var watermark = summary?.CoversUpToMessageId ?? 0;
-        var tailContents = await db.Messages
-            .AsNoTracking()
-            .Where(m => m.ConversationId == conversation.Id && m.Id > watermark)
-            .Select(m => m.Content)
-            .ToListAsync(ct);
-        var threshold = _config.GetValue("Chat:SummaryTailTokens", 800);
-        if (tailContents.Count < 2 || tailContents.Sum(PromptAssembly.EstimateTokens) <= threshold)
-            return WorkOutcome.Ok;
-
-        return await SummariseAsync(db, conversation, ct);
-    }
-
-    private async Task<WorkOutcome> SummariseAsync(
-        AppDbContext db, Conversation conversation, CancellationToken ct)
-    {
-        var bot = await db.Bots.Include(b => b.Preset)
-            .FirstAsync(b => b.Id == conversation.BotId, ct);
-        var preset = bot.Preset!;
-
         var summary = await db.ConversationSummaries
             .FirstOrDefaultAsync(s => s.BotId == conversation.BotId && s.UserId == conversation.UserId, ct);
         var watermark = summary?.CoversUpToMessageId ?? 0;
@@ -138,12 +127,21 @@ public sealed class SummaryHandler : IWorkHandler
             .Where(m => m.ConversationId == conversation.Id && m.Id > watermark)
             .OrderBy(m => m.Id)
             .ToListAsync(ct);
-
-        if (tail.Count < 2) return WorkOutcome.Ok;
-
         var threshold = _config.GetValue("Chat:SummaryTailTokens", 800);
-        if (tail.Sum(m => PromptAssembly.EstimateTokens(m.Content)) <= threshold)
+        if (tail.Count < 2 || tail.Sum(m => PromptAssembly.EstimateTokens(m.Content)) <= threshold)
             return WorkOutcome.Ok;
+
+        return await SummariseAsync(db, conversation, bot, summary, tail, ct);
+    }
+
+    /// <summary>The outcome of one provider call: the new summary, or a failure (shrinkable = deterministic).</summary>
+    private sealed record CallResult(string? Summary, string? Failure, bool Shrinkable);
+
+    private async Task<WorkOutcome> SummariseAsync(
+        AppDbContext db, Conversation conversation, Bot bot, ConversationSummary? summary,
+        List<Message> tail, CancellationToken ct)
+    {
+        var preset = bot.Preset!;
 
         string? apiKey = null;
         if (preset.ApiKeyEncrypted is not null)
@@ -166,95 +164,151 @@ public sealed class SummaryHandler : IWorkHandler
             TimeoutMs = preset.TimeoutMs ?? 120_000,
         });
 
-        var previous = summary?.Content is { Length: > 0 } txt ? txt : "(none — this is the start of the relationship)";
-        var transcript = string.Join("\n", tail.Select(m =>
-            (m.Role == MessageRole.User ? "user" : "friend") + ": " + m.Content));
+        var system = BuildSystemPrompt(bot.Name);
+        var maxInput = _config.GetValue("Chat:SummaryMaxInputTokens", 4000);
+        var target = _config.GetValue("Chat:SummaryTargetTokens", 800);
+        // The output cap must cover thinking + the summary: reasoning models (Qwen3, Nemotron)
+        // spend tokens on reasoning before content, so it is well above the target length.
+        var maxOutput = _config.GetValue("Chat:SummaryMaxTokens", 4096);
+        var maxSteps = Math.Max(1, _config.GetValue("Chat:SummaryMaxSteps", 8));
 
-        var system = "You maintain a rolling narrative summary of an ongoing conversation between a virtual " +
-            $"friend named {bot.Name} and their user. Rewrite the summary to cover the full history. " +
-            "Write in the third person, from a neutral observer's view of the relationship. " +
-            "Record every personal detail the user has shared — names (of people, pets, places), " +
-            "dates, plans, preferences, and what has been decided or promised — even details that seem " +
-            "minor; the friend may be asked about any of them later. Also preserve ongoing threads and " +
-            "the emotional tone. Do not invent details. End with what is currently unresolved or expected. " +
-            "Respond with the summary text only.";
+        var steps = 0;
+        int? stepCap = null; // set once a deterministic failure halved the step
+        var remaining = tail;
+        while (remaining.Count > 0 && steps < maxSteps)
+        {
+            var previous = summary?.Content is { Length: > 0 } txt ? txt : NoSummary;
+            var fixedTokens = PromptAssembly.EstimateTokens(system)
+                + PromptAssembly.EstimateTokens(BuildUserPrompt(previous, "", target));
+            var available = maxInput - fixedTokens;
+            if (available < 64)
+            {
+                var why = $"Summary skipped: the instructions and the previous summary take about {fixedTokens} tokens " +
+                          $"of the {maxInput}-token input budget — raise Chat:SummaryMaxInputTokens or lower " +
+                          "Chat:SummaryTargetTokens.";
+                await LogAsync(db, bot, conversation, model, "[]", why, null, failed: true, ct);
+                return WorkOutcome.FailPermanent(why);
+            }
 
-        // 1024: reasoning models (Qwen3 et al.) spend tokens on thinking before
-        // content — the cap must cover both, or the summary truncates mid-sentence.
-        var maxTokens = _config.GetValue("Chat:SummaryMaxTokens", 1024);
-        var userPrompt = "Previous summary:\n" + previous +
-            "\n\nNew messages since then (oldest first):\n" + transcript +
-            $"\n\nWrite the updated summary (under {maxTokens} tokens).";
+            // One message larger than the whole budget is clipped (its start is kept) rather than
+            // blocking the summary forever.
+            var clipChars = Math.Max(400, available * 3);
+            var chunk = TokenLimits.Chunk(remaining, m => PromptAssembly.EstimateTokens(Line(m, clipChars)), available)[0];
+            if (stepCap is { } cap && chunk.Count > cap) chunk = chunk.Take(cap).ToList();
 
+            var transcript = string.Join("\n", chunk.Select(m => Line(m, clipChars)));
+            var res = await CallAsync(db, provider, bot, conversation, model, system,
+                BuildUserPrompt(previous, transcript, target), maxOutput, ct);
+
+            if (res.Summary is null)
+            {
+                if (res.Shrinkable && stepCap is null && chunk.Count >= 2)
+                {
+                    stepCap = chunk.Count / 2;
+                    _log.LogWarning("Summary for conversation {ConversationId}: {Failure} — retrying with {Cap} messages per step",
+                        conversation.Id, Truncate(res.Failure, 200), stepCap);
+                    continue;
+                }
+                if (!res.Shrinkable) return WorkOutcome.Fail(res.Failure);
+                return WorkOutcome.FailPermanent(res.Failure + (chunk.Count < 2
+                    ? " (a single message cannot be shrunk further)"
+                    : " (already retried on a smaller input)"));
+            }
+
+            // ── Commit the step: summary and watermark move together ──────────
+            if (summary is null)
+            {
+                summary = new ConversationSummary { BotId = conversation.BotId, UserId = conversation.UserId };
+                db.ConversationSummaries.Add(summary);
+            }
+            summary.Content = res.Summary;
+            summary.CoversUpToMessageId = chunk.Max(m => m.Id);
+            summary.TokenCount = PromptAssembly.EstimateTokens(res.Summary);
+            summary.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+            steps++;
+            remaining = remaining.Skip(chunk.Count).ToList();
+        }
+
+        _log.LogInformation("Rewrote summary for conversation {ConversationId} in {Steps} step(s) — now covers up to message {MaxId}{More}",
+            conversation.Id, steps, summary?.CoversUpToMessageId, remaining.Count > 0 ? $" ({remaining.Count} messages left for the next pass)" : "");
+        return WorkOutcome.Ok;
+    }
+
+    private async Task<CallResult> CallAsync(
+        AppDbContext db, ILlmProvider provider, Bot bot, Conversation conversation, string model,
+        string system, string userPrompt, int maxOutput, CancellationToken ct)
+    {
         var requestMessages = new List<LlmChatMessage>
         {
             new(MessageRole.System, system),
             new(MessageRole.User, userPrompt),
         };
-
         var request = new LlmChatRequest
         {
             Messages = requestMessages,
             Model = model,
             Temperature = _config.GetValue("Chat:SummaryTemperature", 0.3f),
-            MaxTokens = maxTokens,
+            MaxTokens = maxOutput,
         };
 
-        var now = DateTime.UtcNow;
-        string? newSummary = null;
-        string? failure = null;
-        bool failed = false;
+        string? raw = null, newSummary = null, failure = null;
+        bool failed = false, shrinkable = false;
+        int? httpStatus = null;
         LlmCompletion? completion = null;
 
         try
         {
             completion = await provider.ChatAsync(request, ct);
-            newSummary = (completion.Content ?? "").Trim();
-            if (newSummary.Length == 0)
-                throw new LlmProviderException("Summarisation returned an empty summary.", null, null);
-            // A model that spent its whole budget (thinking models burn tokens on
-            // reasoning before content) truncates mid-sentence. Never let a cut-off
-            // summary replace a good one.
+            raw = completion.Content ?? "";
             if (completion.FinishReason == "length")
-                throw new LlmProviderException(
-                    "Summary truncated at the token cap (finish_reason=length) — raise Chat:SummaryMaxTokens " +
-                    "or lower Chat:SummaryTailTokens.", null, null);
+            {
+                // Cut off at the output cap (a reasoning model spends it thinking). Never let a
+                // cut-off summary replace a good one.
+                failed = shrinkable = true;
+                failure = $"Summary truncated at the output cap (finish_reason=length, Chat:SummaryMaxTokens={maxOutput}) — " +
+                          "raise Chat:SummaryMaxTokens or use a non-reasoning utility model.";
+            }
+            else
+            {
+                newSummary = TokenLimits.StripThinking(raw);
+                if (newSummary.Length == 0)
+                {
+                    failed = true;
+                    failure = "Summarisation returned an empty summary.";
+                    newSummary = null;
+                }
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (LlmProviderException ex)
         {
             failed = true;
-            failure = ex.HttpStatus is { } s
-                ? $"Provider returned HTTP {s}: {Truncate(ex.ErrorPayload, 2000)}"
-                : ex.Message;
+            httpStatus = ex.HttpStatus;
+            shrinkable = TokenLimits.IsContextLengthError(ex);
+            failure = ex.HttpStatus is { } s ? $"Provider returned HTTP {s}: {Truncate(ex.ErrorPayload, 2000)}" : ex.Message;
+            if (shrinkable)
+                failure += " — the prompt exceeds the model's context window; lower Chat:SummaryMaxInputTokens.";
         }
         catch (Exception ex)
         {
             failed = true;
             failure = ex.Message;
         }
+        if (failed) _log.LogWarning("Summary for conversation {ConversationId} failed: {Failure}", conversation.Id, Truncate(failure, 300));
 
-        if (!failed && newSummary is not null)
-        {
-            if (summary is null)
-            {
-                summary = new ConversationSummary
-                {
-                    BotId = conversation.BotId,
-                    UserId = conversation.UserId,
-                };
-                db.ConversationSummaries.Add(summary);
-            }
-            summary.Content = newSummary;
-            summary.CoversUpToMessageId = tail.Max(m => m.Id);
-            summary.TokenCount = PromptAssembly.EstimateTokens(newSummary);
-            summary.UpdatedAt = now;
-            await db.SaveChangesAsync(ct);
-            _log.LogInformation("Rewrote summary for conversation {ConversationId} — now covers up to message {MaxId}",
-                conversation.Id, summary.CoversUpToMessageId);
-        }
+        // Every call is logged, success or failure (§4.4); the raw response is kept as returned.
+        await LogAsync(db, bot, conversation, model, SerializeRequest(requestMessages),
+            failed ? (string.IsNullOrEmpty(raw) ? failure : raw) : raw, completion, failed, ct, failure, httpStatus);
 
-        // Every call is logged, success or failure (§4.4).
+        return failed ? new CallResult(null, failure, shrinkable) : new CallResult(newSummary, null, false);
+    }
+
+    private static async Task LogAsync(
+        AppDbContext db, Bot bot, Conversation conversation, string model, string requestBody, string? response,
+        LlmCompletion? completion, bool failed, CancellationToken ct, string? failure = null, int? httpStatus = null)
+    {
+        var preset = bot.Preset!;
         db.LlmInteractions.Add(new LlmInteraction
         {
             Purpose = InteractionPurpose.Summarisation,
@@ -264,19 +318,39 @@ public sealed class SummaryHandler : IWorkHandler
             Provider = preset.Provider,
             Model = model,
             Endpoint = string.IsNullOrWhiteSpace(preset.BaseEndpoint) ? "(default)" : preset.BaseEndpoint,
-            RequestBody = SerializeRequest(requestMessages),
-            ResponseContent = newSummary ?? failure,
+            RequestBody = requestBody,
+            ResponseContent = response,
             PromptTokens = completion?.PromptTokens,
             CompletionTokens = completion?.CompletionTokens,
             TotalTokens = completion?.TotalTokens,
             FinishReason = completion?.FinishReason,
             Failed = failed,
-            FailureReason = failure,
-            CreatedAt = now,
+            HttpStatus = httpStatus,
+            FailureReason = failed ? (failure ?? response) : null,
+            CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync(ct);
+    }
 
-        return failed ? WorkOutcome.Fail(failure) : WorkOutcome.Ok;
+    internal static string BuildSystemPrompt(string botName) =>
+        "You maintain a rolling narrative summary of an ongoing conversation between a virtual " +
+        $"friend named {botName} and their user. Rewrite the summary to cover the full history. " +
+        "Write in the third person, from a neutral observer's view of the relationship. " +
+        "Record every personal detail the user has shared — names (of people, pets, places), " +
+        "dates, plans, preferences, and what has been decided or promised — even details that seem " +
+        "minor; the friend may be asked about any of them later. Also preserve ongoing threads and " +
+        "the emotional tone. Do not invent details. End with what is currently unresolved or expected. " +
+        "Respond with the summary text only.";
+
+    internal static string BuildUserPrompt(string previous, string transcript, int targetTokens) =>
+        "Previous summary:\n" + previous +
+        "\n\nNew messages since then (oldest first):\n" + transcript +
+        $"\n\nWrite the updated summary (under {targetTokens} tokens).";
+
+    private static string Line(Message m, int clipChars)
+    {
+        var text = m.Content.Length <= clipChars ? m.Content : m.Content[..clipChars] + " …[cut]";
+        return (m.Role == MessageRole.User ? "user" : "friend") + ": " + text;
     }
 
     private static string SerializeRequest(IReadOnlyList<LlmChatMessage> messages) =>

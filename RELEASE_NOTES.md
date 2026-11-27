@@ -1,5 +1,29 @@
 # Release notes
 
+## Unreleased — background passes under token limits
+
+- **Trait consolidation and summaries no longer fail on long input.** Both passes
+  now keep each request within an input budget and split longer input: a long
+  trait list is consolidated in chunks, a long conversation is summarised in
+  steps (oldest first; each step is saved, so nothing is lost if a later one
+  fails).
+- **Token-limit failures stop at once, with a reason.** When a model rejects a
+  request as too long, or runs out of output tokens (common with reasoning
+  models), the pass retries once on a smaller input and otherwise stops after
+  that attempt instead of retrying the same request five times. The admin work
+  panel shows which setting to change.
+- **Consolidation keeps the personality.** A consolidation must keep at least
+  half of the trigger size (6 traits by default); a result that collapses the
+  list is not applied. If the merged chunk results are still too long, one more
+  pass merges them.
+- **Limits for human trait edits.** Adding or editing a trait by hand obeys the
+  same count and length limits as the bot (the API returns 400 with the reason).
+- Bot memories are clipped to 1000 characters before they are embedded.
+- New settings: `Evolution__MaxInputTokens`, `Evolution__MinTraitsAfter`,
+  `Chat__SummaryMaxInputTokens`, `Chat__SummaryTargetTokens`,
+  `Chat__SummaryMaxSteps`. `Evolution__MaxTokens` and `Chat__SummaryMaxTokens`
+  now default to 4096.
+
 ## Unreleased
 
 - **One structured reply per turn.** Each reply now comes back as a small JSON

@@ -63,6 +63,17 @@ public class ConsolidationLimitsTests
     }
 
     [Fact]
+    public void Bot_memories_are_clipped_before_they_reach_the_embedding_call()
+    {
+        Assert.Equal("short fact", MemoryWriter.Clip("short fact"));
+        var words = string.Join(' ', Enumerable.Repeat("word", 1000)); // 4999 chars
+        var clipped = MemoryWriter.Clip(words);
+        Assert.True(clipped.Length <= MemoryWriter.MaxContentChars + 1);
+        Assert.EndsWith("word…", clipped); // cut at a word boundary
+        Assert.Equal(MemoryWriter.MaxContentChars + 1, MemoryWriter.Clip(new string('x', 5000)).Length);
+    }
+
+    [Fact]
     public async Task Permanent_failures_dead_letter_on_the_first_attempt()
     {
         using var db = new TestAppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
@@ -231,7 +242,9 @@ public class ConsolidationLimitsTests
         Assert.All(p.Calls, c => Assert.True(c.Tokens <= 500 + 20, $"prompt of {c.Tokens} tokens exceeds the budget"));
         Assert.Equal(60, p.Calls.Sum(c => c.Items)); // every trait seen exactly once
         Assert.Equal(p.Calls.Count, await f.Db.LlmInteractions.CountAsync()); // each call logged (§4.4)
-        Assert.Equal(p.Calls.Count, (await PersonaTraits.ActiveAsync(f.Db, 9)).Count);
+        // the chunk results (one each) are still above ConsolidateAbove=2 → one final pass over them
+        Assert.Equal(0, p.Calls[^1].Items);
+        Assert.Equal(["chunk result " + p.Calls.Count], (await PersonaTraits.ActiveAsync(f.Db, 9)).Select(t => t.Text));
     }
 
     [Fact]
@@ -239,8 +252,8 @@ public class ConsolidationLimitsTests
     {
         var f = new Fixture(8);
         var p = new ScriptedProvider((req, tokens) =>
-            tokens > 260
-                ? throw new LlmProviderException("Provider returned 400", 400, "{\"error\":{\"code\":\"context_length_exceeded\",\"message\":\"maximum context length is 260 tokens\"}}")
+            tokens > 300
+                ? throw new LlmProviderException("Provider returned 400", 400, "{\"error\":{\"code\":\"context_length_exceeded\",\"message\":\"maximum context length is 300 tokens\"}}")
                 : Ok("[\"half result\"]"));
         var outcome = await Handler(p, Config(("Evolution:MaxInputTokens", "100000"))).ExecuteAsync(f.Db, f.NewItem(), default);
         Assert.True(outcome.Success, outcome.Failure);
@@ -316,5 +329,90 @@ public class ConsolidationLimitsTests
         var o2 = await Handler(junk, Config()).ExecuteAsync(f.Db, f.NewItem(), default);
         Assert.False(o2.Success);
         Assert.False(o2.Permanent);
+    }
+
+    // ── output floor and the final pass ─────────────────────────────────────
+
+    private static string Items(int n, string prefix = "kept") =>
+        System.Text.Json.JsonSerializer.Serialize(Enumerable.Range(1, n).Select(i => $"{prefix} {i}"));
+
+    [Fact]
+    public async Task A_result_below_the_floor_is_logged_retryable_and_not_applied()
+    {
+        var f = new Fixture(40);
+        var p = new ScriptedProvider((_, _) => Ok("[\"one vague trait\"]")); // 40 → 1: the personality is gone
+        var cfg = Config(("Turn:ConsolidateAbove", "12"), ("Evolution:MaxInputTokens", "100000"));
+        var outcome = await Handler(p, cfg).ExecuteAsync(f.Db, f.NewItem(), default);
+        Assert.False(outcome.Success);
+        Assert.False(outcome.Permanent);                      // retryable: the next attempt may do better
+        Assert.Contains("below the floor of 6", outcome.Failure);
+        Assert.Contains("Evolution:MinTraitsAfter", outcome.Failure);
+        Assert.Equal(40, (await PersonaTraits.ActiveAsync(f.Db, 9)).Count);
+        Assert.Single(await f.Db.PersonaVersions.ToListAsync());
+        var log = Assert.Single(await f.Db.LlmInteractions.ToListAsync());
+        Assert.True(log.Failed);
+        Assert.Equal("[\"one vague trait\"]", log.ResponseContent); // the rejected answer stays inspectable (§4.4)
+    }
+
+    [Fact]
+    public async Task The_prompt_states_the_target_range_and_a_result_inside_it_is_applied()
+    {
+        var f = new Fixture(40);
+        string? brief = null;
+        var p = new ScriptedProvider((req, _) => { brief = req.Messages.Last().Content; return Ok(Items(8)); });
+        var cfg = Config(("Turn:ConsolidateAbove", "12"), ("Evolution:MaxInputTokens", "100000"));
+        var outcome = await Handler(p, cfg).ExecuteAsync(f.Db, f.NewItem(), default);
+        Assert.True(outcome.Success, outcome.Failure);
+        Assert.Contains("between 6 and 12 items", brief);
+        Assert.Equal(8, (await PersonaTraits.ActiveAsync(f.Db, 9)).Count);
+    }
+
+    [Fact]
+    public async Task The_floor_is_configurable_and_never_above_the_input_count()
+    {
+        var f = new Fixture(5);
+        string? brief = null;
+        var p = new ScriptedProvider((req, _) => { brief = req.Messages.Last().Content; return Ok(Items(5)); });
+        var cfg = Config(("Turn:ConsolidateAbove", "4"), ("Evolution:MinTraitsAfter", "30"));
+        var outcome = await Handler(p, cfg).ExecuteAsync(f.Db, f.NewItem(), default);
+        Assert.True(outcome.Success, outcome.Failure);
+        Assert.Contains("between 5 and 5 items", brief); // clamped to the 5 traits it was given
+    }
+
+    [Fact]
+    public async Task Chunk_results_over_the_trigger_get_one_final_pass_within_the_range()
+    {
+        var f = new Fixture(60);
+        var briefs = new List<string>();
+        var p = new ScriptedProvider((req, _) =>
+        {
+            var b = req.Messages.Last().Content;
+            briefs.Add(b);
+            return b.Contains("- trait number") ? Ok(Items(4, $"c{briefs.Count}")) : Ok(Items(9, "final"));
+        });
+        var cfg = Config(("Turn:ConsolidateAbove", "12"), ("Evolution:MaxInputTokens", "500"));
+        var outcome = await Handler(p, cfg).ExecuteAsync(f.Db, f.NewItem(), default);
+        Assert.True(outcome.Success, outcome.Failure);
+        Assert.True(p.Calls.Count >= 4, $"{p.Calls.Count} calls");
+        Assert.Contains("between 6 and 12 items", briefs[^1]);   // the final pass asks for the whole-list range
+        Assert.Contains("- c1 1", briefs[^1]);                    // ... over the merged chunk results
+        Assert.All(p.Calls, c => Assert.True(c.Tokens <= 500 + 20));
+        Assert.Equal(Enumerable.Range(1, 9).Select(i => $"final {i}"), (await PersonaTraits.ActiveAsync(f.Db, 9)).Select(t => t.Text));
+    }
+
+    [Fact]
+    public async Task A_failed_final_pass_keeps_the_chunk_results()
+    {
+        var f = new Fixture(60);
+        var p = new ScriptedProvider((req, _) => req.Messages.Last().Content.Contains("- trait number")
+            ? Ok(Items(4, "c" + Guid.NewGuid().ToString("N")[..4]))
+            : Ok("[\"too few\"]")); // final pass collapses the list → below the floor → ignored
+        var cfg = Config(("Turn:ConsolidateAbove", "12"), ("Evolution:MaxInputTokens", "500"));
+        var outcome = await Handler(p, cfg).ExecuteAsync(f.Db, f.NewItem(), default);
+        Assert.True(outcome.Success, outcome.Failure);
+        var chunkCalls = p.Calls.Count(c => c.Items > 0);
+        Assert.Equal(chunkCalls + 1, p.Calls.Count);
+        Assert.Equal(chunkCalls * 4, (await PersonaTraits.ActiveAsync(f.Db, 9)).Count);
+        Assert.True((await f.Db.LlmInteractions.OrderBy(i => i.Id).LastAsync()).Failed);
     }
 }

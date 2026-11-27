@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: feedback
   originSessionId: 378d05cf-486d-4bba-8448-6832863ea4db
-  modified: 2026-11-27T20:54:42.879Z
+  modified: 2026-11-27T21:19:00.413Z
 ---
 
 Series fixing background personality jobs (trait consolidation `EvolutionHandler`, summary) that fail with token-exceeded errors. Same orchestrate-tasks flow as [[turn-envelope-orchestration]].
@@ -23,3 +23,4 @@ Series fixing background personality jobs (trait consolidation `EvolutionHandler
 - 2026-11-27 User gave an OpenRouter key (free models); stored at /home/chds/.claude/jobs/378d05cf/tmp/openrouter.key (600) — delete at series end.
 - 2026-11-27 T1 merged (worker restarted as `f64098f6`, now stopped; worktree/branch removed). 145 tests; real model OK but 40 traits → 1 (too aggressive) → output floor added to T2.
 - 2026-11-27 T2 brief written; worker `36e9c6e4` (AChat bgtok T2 summary) started.
+- 2026-11-27 T2 merged (161 tests; real model 40 → 10 traits, summary 2 steps, 0 failed); worker stopped, worktree/branch removed, key file deleted. Series complete; integration branch pushed, no PR yet, not merged to main — waiting on user. Disk 97% (5 GB free).

@@ -249,6 +249,13 @@ about their cooking`) so the bot can retire by id.
   rejection or `finish_reason=length` is deterministic: the chunk is split in two and retried
   once within the attempt, else the work item is dead-lettered at once (§12b) with an actionable
   reason. Human trait add/edit obeys the same count/length/total caps as the envelope (400).
+  **Output floor:** consolidation must not erase the personality (a real model once merged 40
+  traits into one). The prompt states a target range — at least `Evolution:MinTraitsAfter`
+  (default half of `Turn:ConsolidateAbove`, never more than the input), at most
+  `Turn:ConsolidateAbove`; chunks get proportional shares — and a result below the floor is
+  logged and **not applied** (a retryable failure). Chunk results that together are still above
+  `Turn:ConsolidateAbove` get one final pass over the merged list when it fits the budget; if
+  that pass fails, the chunk results are applied as they are.
 - **Legacy.** A bot with prose from the old rewrite pass gets it as **one legacy item** on
   first read; older prose versions are read as one item too.
 - **Switch.** Evolution can be turned off per bot (`Bot.EvolutionEnabled`, toggle on the
@@ -404,6 +411,13 @@ debuggability outweigh the storage cost. The log remains admin-scoped (§2.5.3).
   failure notice appears in chat (`chat.failed`) with the HTTP status and the provider's
   message; there is no mid-stream retry. The interaction log records the terminal status.
   (Supersedes the "no automatic retry" note in §3, which predates Phase 8.)
+- **Token limits in background passes** — consolidation (§2.4) and the rolling summary
+  (§5.3) bound their prompt by an input budget (`Evolution:MaxInputTokens`,
+  `Chat:SummaryMaxInputTokens`) and split longer input into chunks/steps. A context-length
+  rejection (HTTP 400/413/422 with a context-window message) or `finish_reason=length` is
+  deterministic — the same request fails again — so the pass shrinks its input once and
+  otherwise fails **permanently**: the work item dead-letters on that attempt (§12b) with a
+  reason that names the setting to change. Any other failure keeps the normal retry path.
 
 ### 4.6 Tool use / function calling `[DECIDED — dropped; superseded by §4.7]`
 
@@ -638,7 +652,16 @@ watermark; a failed pass leaves the watermark untouched so the same tail retries
 next sweep. The summary prompt requires recording every personal detail the user has shared
 (names, dates, plans, preferences) — the bot must be able to answer questions about any of
 them later. A pass that ends `finish_reason=length` is treated as a failure: a truncated
-summary must never replace a good one. Verified end-to-end: a bot recalled facts planted
+summary must never replace a good one. **Token limits:** the prompt is bounded by
+`Chat:SummaryMaxInputTokens` (4000; instructions + previous summary count against it). A
+longer tail is summarised in **steps**, oldest first; each step folds its messages in and
+advances the watermark in the same commit, so the summary always matches what it covers and a
+later failure loses nothing. At most `Chat:SummaryMaxSteps` (8) steps run per pass; the
+producer re-arms the rest. A single message larger than the budget is clipped in the prompt.
+A context-length rejection or `finish_reason=length` halves the step once, else the item
+dead-letters at once (§4.5, §12b). Output cap `Chat:SummaryMaxTokens` = 4096 (reasoning
+models think first); the requested length is `Chat:SummaryTargetTokens` (800). Inline
+`<think>` is stripped. Verified end-to-end: a bot recalled facts planted
 far outside its recent-history window, and reacted correctly to a multi-hour silence.
 
 #### 5.3.1 Historical: the background extraction pass (retired)
@@ -1523,7 +1546,10 @@ WorkItems
 - **Outcomes.** Success → the row is deleted (the handler has already advanced the summary
   watermark / written its version / rewritten the summary). Failure → `LastFailure` is
   stored, and either `Status = Dead` (attempts exhausted) or back to `Pending` with
-  `NextTryAt = now + min(MaxDelay, BaseDelay · 2^attempts) + jitter`.
+  `NextTryAt = now + min(MaxDelay, BaseDelay · 2^attempts) + jitter`. A **permanent** failure
+  (a token limit that shrinking the input did not cure, §4.5; a fixed prompt that alone
+  exceeds the budget) dead-letters on that attempt — retrying the same request cannot succeed.
+  The admin fixes the setting named in `LastFailure`, then retries the item.
 - **At-least-once, idempotent handlers.** Consolidation appends a version (re-claiming after a
   post-commit crash finds a short list and no-ops); summarisation is an in-place rewrite of
   the same input. A double execution is harmless.

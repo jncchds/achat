@@ -36,5 +36,12 @@ handler against a fake provider (context error → shrink → success; truncatio
 `mockllm.mjs` modes against a throwaway instance on 5002 via an e2e script (extend `traits.mjs` or add
 `consolidation-limits.mjs`): a 60-trait bot consolidates under a small mock context limit.
 
+## Real model (user approved: run the app and test the jobs via OpenRouter)
+Free OpenRouter models only (e.g. `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`, embeddings
+`nvidia/nemotron-3.5-embed-1b:free`). The key is NOT in the repo or env. If the orchestrator has
+passed a key file path in your prompt, read it only to set the preset through the API, never write it
+into the repo, a log, or a report, and delete any copy you make. If there is no key, finish everything
+mock-based and say clearly the real-model run was not done.
+
 ## Docs
 Report; update design.md §2.4 / §12b notes only where behaviour changed.

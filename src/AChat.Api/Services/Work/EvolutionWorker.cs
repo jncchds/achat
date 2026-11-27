@@ -282,6 +282,7 @@ public sealed class EvolutionHandler : IWorkHandler
         string? rawResponse = null;
         string? failure = null;
         bool failed = false, shrinkable = false;
+        int? httpStatus = null;
         List<string>? merged = null;
         LlmCompletion? completion = null;
         run.Calls++;
@@ -303,6 +304,7 @@ public sealed class EvolutionHandler : IWorkHandler
         catch (LlmProviderException ex)
         {
             failed = true;
+            httpStatus = ex.HttpStatus;
             shrinkable = TokenLimits.IsContextLengthError(ex);
             failure = ex.HttpStatus is { } s ? $"Provider returned HTTP {s}: {Truncate(ex.ErrorPayload, 2000)}" : ex.Message;
             if (shrinkable)
@@ -343,6 +345,7 @@ public sealed class EvolutionHandler : IWorkHandler
             TotalTokens = completion?.TotalTokens,
             FinishReason = completion?.FinishReason,
             Failed = failed,
+            HttpStatus = httpStatus,
             FailureReason = failure,
             Notes = merged is null ? null : $"Consolidated {chunk.Count} → {merged.Count} traits",
             CreatedAt = DateTime.UtcNow,
